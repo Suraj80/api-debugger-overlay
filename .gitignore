@@ -25,3 +25,4 @@ dist-ssr
 
 setup_guide.md
 api_debugger_prd.md
+.pnpm-store/

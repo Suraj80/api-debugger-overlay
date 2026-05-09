@@ -1,10 +1,9 @@
-// Runs in page context — has access to real window.fetch and XHR
-// Injected before any page scripts via web_accessible_resources
-// Only bridge to extension: window.postMessage
+// Runs in page context - has access to real window.fetch and XHR.
+// Only bridge to extension: window.postMessage.
 
 const originalFetch = window.fetch.bind(window)
 
-window.fetch = async (input: RequestInfo, init?: RequestInit) => {
+window.fetch = async (input, init) => {
   const startTime = performance.now()
   const url = input instanceof Request ? input.url : input.toString()
   const method = (init?.method ?? 'GET').toUpperCase()
