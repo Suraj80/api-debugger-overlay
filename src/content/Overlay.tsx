@@ -1,8 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { RequestEntry } from '../shared/types'
+import type { ApiDebuggerSettings } from '../shared/settings'
 
 interface RequestCompleteMessage {
   type: 'REQUEST_COMPLETE'
+  payload: RequestEntry
+}
+
+interface RequestUpdatedMessage {
+  type: 'REQUEST_UPDATED'
   payload: RequestEntry
 }
 
@@ -11,12 +17,26 @@ type JsonExpandMode = 'all' | 'none' | null
 type JsonTab = 'response' | 'request'
 type AISuggestionState = 'idle' | 'loading' | 'result'
 
+interface OverlayProps {
+  settings: ApiDebuggerSettings
+}
+
 function isRequestCompleteMessage(msg: unknown): msg is RequestCompleteMessage {
   return (
     typeof msg === 'object' &&
     msg !== null &&
     'type' in msg &&
     (msg as { type?: unknown }).type === 'REQUEST_COMPLETE' &&
+    'payload' in msg
+  )
+}
+
+function isRequestUpdatedMessage(msg: unknown): msg is RequestUpdatedMessage {
+  return (
+    typeof msg === 'object' &&
+    msg !== null &&
+    'type' in msg &&
+    (msg as { type?: unknown }).type === 'REQUEST_UPDATED' &&
     'payload' in msg
   )
 }
@@ -95,8 +115,6 @@ const overlayThemeCss = `
 
   .apidbg-overlay {
     position: fixed;
-    right: 16px;
-    bottom: 16px;
     z-index: 2147483647;
     display: flex;
     width: 380px;
@@ -108,6 +126,30 @@ const overlayThemeCss = `
     background: var(--api-bg);
     color: var(--api-text);
     box-shadow: 0 25px 50px rgba(0, 0, 0, 0.58);
+  }
+
+  .apidbg-overlay.is-bottom-right,
+  .apidbg-minimised.is-bottom-right {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .apidbg-overlay.is-bottom-left,
+  .apidbg-minimised.is-bottom-left {
+    left: 16px;
+    bottom: 16px;
+  }
+
+  .apidbg-overlay.is-top-right,
+  .apidbg-minimised.is-top-right {
+    top: 16px;
+    right: 16px;
+  }
+
+  .apidbg-overlay.is-top-left,
+  .apidbg-minimised.is-top-left {
+    top: 16px;
+    left: 16px;
   }
 
   .apidbg-header {
@@ -146,21 +188,37 @@ const overlayThemeCss = `
   }
 
   .apidbg-actions {
-    gap: 10px;
+    gap: 4px;
   }
 
   .apidbg-icon-button {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
     border: 0;
+    border-radius: 5px;
     background: none;
     color: var(--api-text-subtle);
     cursor: pointer;
-    font-size: 15px;
     line-height: 1;
-    padding: 2px;
+    padding: 0;
+    transition: background 0.15s ease, color 0.15s ease;
   }
 
-  .apidbg-icon-button:hover {
+  .apidbg-icon-button:hover,
+  .apidbg-icon-button:focus-visible {
+    background: var(--api-surface-raised);
     color: var(--api-color-primary-soft);
+    outline: none;
+  }
+
+  .apidbg-icon-button svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    stroke: currentColor;
   }
 
   .apidbg-chip-row {
@@ -379,6 +437,34 @@ const overlayThemeCss = `
     padding-top: 8px;
   }
 
+  .apidbg-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .apidbg-meta-cell {
+    border: 1px solid var(--api-border);
+    border-radius: 6px;
+    background: var(--api-surface);
+    padding: 6px 8px;
+  }
+
+  .apidbg-meta-label {
+    color: var(--api-text-subtle);
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+
+  .apidbg-meta-value {
+    margin-top: 2px;
+    color: var(--api-text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
   .apidbg-primary-button,
   .apidbg-secondary-button {
     border-radius: 6px;
@@ -444,8 +530,6 @@ const overlayThemeCss = `
 
   .apidbg-minimised {
     position: fixed;
-    right: 16px;
-    bottom: 16px;
     z-index: 2147483647;
     gap: 6px;
     border: 1px solid var(--api-border);
@@ -550,6 +634,39 @@ const overlayThemeCss = `
 
 function LiveDot({ isCapturing }: { isCapturing: boolean }) {
   return <span className={`apidbg-live-dot${isCapturing ? ' is-capturing' : ''}`} />
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M6 4.5v7M10 4.5v7" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M6 4.5l5 3.5-5 3.5v-7z" strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function SidePanelIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="3" y="3" width="10" height="10" rx="1.5" strokeWidth="1.4" />
+      <path d="M9.5 3v10" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function MinimiseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M4.5 8h7" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  )
 }
 
 function MethodBadge({ method }: { method: string }) {
@@ -749,6 +866,11 @@ function parseBody(body: string | null): unknown {
   }
 }
 
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
+
 function getPath(url: string) {
   try {
     const u = new URL(url)
@@ -895,6 +1017,7 @@ function RequestRow({ req }: { req: RequestEntry }) {
     method: req.method,
     url: req.url,
     headers: req.requestHeaders,
+    body: req.requestBody,
     requestSize: req.requestSize,
     fingerprint: req.fingerprint,
   }), [req])
@@ -948,6 +1071,21 @@ function RequestRow({ req }: { req: RequestEntry }) {
             </div>
           </div>
 
+          <div className="apidbg-meta-grid">
+            <div className="apidbg-meta-cell">
+              <div className="apidbg-meta-label">TTFB</div>
+              <div className="apidbg-meta-value">{req.ttfb > 0 ? `${req.ttfb}ms` : '-'}</div>
+            </div>
+            <div className="apidbg-meta-cell">
+              <div className="apidbg-meta-label">Request</div>
+              <div className="apidbg-meta-value">{formatBytes(req.requestSize)}</div>
+            </div>
+            <div className="apidbg-meta-cell">
+              <div className="apidbg-meta-label">Response</div>
+              <div className="apidbg-meta-value">{formatBytes(req.responseSize)}</div>
+            </div>
+          </div>
+
           <div className="apidbg-json-box apidbg-scroll">
             <JsonNode value={jsonValue} depth={0} search={search} forceExpand={forceExpand} />
           </div>
@@ -973,7 +1111,24 @@ function RequestRow({ req }: { req: RequestEntry }) {
             {(req.isSlow || req.status >= 400) && (
               <button className="apidbg-primary-button" onClick={triggerAI}>Ask AI</button>
             )}
-            <button className="apidbg-secondary-button">Replay</button>
+            <button
+              className="apidbg-secondary-button"
+              onClick={() => {
+                sendRuntimeMessage({
+                  type: 'SELECT_REPLAY',
+                  payload: {
+                    id: req.id,
+                    method: req.method,
+                    url: req.url,
+                    headers: req.requestHeaders,
+                    body: req.requestBody,
+                    originalResponseBody: req.responseBody,
+                  },
+                })
+              }}
+            >
+              Replay
+            </button>
           </div>
 
           <AICard
@@ -1001,9 +1156,25 @@ function EmptyFeed() {
   )
 }
 
-export function Overlay() {
+function positionClass(position: ApiDebuggerSettings['overlayPosition']) {
+  return `is-${position.toLowerCase().replaceAll(' ', '-')}`
+}
+
+function sendRuntimeMessage(message: unknown) {
+  try {
+    if (!chrome.runtime?.id) return
+
+    chrome.runtime.sendMessage(message).catch(() => {
+      // Extension context may be unavailable after a reload.
+    })
+  } catch {
+    // Stale content scripts can remain on long-lived pages after extension reloads.
+  }
+}
+
+export function Overlay({ settings }: OverlayProps) {
   const [requests, setRequests] = useState<RequestEntry[]>([])
-  const [state, setState] = useState<OverlayState>('feed')
+  const [state, setState] = useState<OverlayState>(settings.showOverlayOnLoad ? 'feed' : 'minimised')
   const [sweep, setSweep] = useState(false)
 
   useEffect(() => {
@@ -1011,9 +1182,24 @@ export function Overlay() {
       if (isRequestCompleteMessage(msg)) {
         setRequests(prev => [msg.payload, ...prev].slice(0, 100))
       }
+      if (isRequestUpdatedMessage(msg)) {
+        setRequests(prev => prev.map(request => request.id === msg.payload.id ? msg.payload : request))
+      }
     }
-    chrome.runtime.onMessage.addListener(handler)
-    return () => chrome.runtime.onMessage.removeListener(handler)
+    try {
+      if (!chrome.runtime?.id) return
+
+      chrome.runtime.onMessage.addListener(handler)
+      return () => {
+        try {
+          chrome.runtime.onMessage.removeListener(handler)
+        } catch {
+          // Extension context may be unavailable after a reload.
+        }
+      }
+    } catch {
+      return
+    }
   }, [])
 
   const total = requests.length
@@ -1025,12 +1211,17 @@ export function Overlay() {
   const showSparkline = requests.length >= 3
   const avgColor = avg < 500 ? 'var(--api-success)' : avg < 1500 ? 'var(--api-warning)' : 'var(--api-danger)'
   const errColor = errorRate === 0 ? 'var(--api-success)' : errorRate <= 5 ? 'var(--api-warning)' : 'var(--api-danger)'
+  const overlayPositionClass = positionClass(settings.overlayPosition)
+
+  const openSidePanel = () => {
+    sendRuntimeMessage({ type: 'OPEN_SIDE_PANEL' })
+  }
 
   if (state === 'minimised') {
     return (
       <>
         <style>{overlayThemeCss}</style>
-        <button className="apidbg-minimised" onClick={() => setState('feed')}>
+        <button className={`apidbg-minimised ${overlayPositionClass}`} onClick={() => setState('feed')}>
           <LiveDot isCapturing />
           <span>API</span>
           <span style={{ color: 'var(--api-text-subtle)', fontSize: 10 }}>^</span>
@@ -1042,7 +1233,7 @@ export function Overlay() {
   return (
     <>
       <style>{overlayThemeCss}</style>
-      <div className="apidbg-overlay">
+      <div className={`apidbg-overlay ${overlayPositionClass}`}>
         <div className="apidbg-header">
           <div className="apidbg-title-row">
             <div className="apidbg-title">
@@ -1053,12 +1244,27 @@ export function Overlay() {
               <button
                 className="apidbg-icon-button"
                 onClick={() => setState(isCapturing ? 'paused' : 'feed')}
+                aria-label={isCapturing ? 'Pause capture' : 'Resume capture'}
                 title={isCapturing ? 'Pause' : 'Resume'}
               >
-                {isCapturing ? '||' : '>'}
+                {isCapturing ? <PauseIcon /> : <PlayIcon />}
               </button>
-              <button className="apidbg-icon-button" title="Open side panel">[]</button>
-              <button className="apidbg-icon-button" onClick={() => setState('minimised')} title="Minimise">-</button>
+              <button
+                className="apidbg-icon-button"
+                onClick={openSidePanel}
+                aria-label="Open side panel"
+                title="Open side panel"
+              >
+                <SidePanelIcon />
+              </button>
+              <button
+                className="apidbg-icon-button"
+                onClick={() => setState('minimised')}
+                aria-label="Minimise overlay"
+                title="Minimise"
+              >
+                <MinimiseIcon />
+              </button>
             </div>
           </div>
 

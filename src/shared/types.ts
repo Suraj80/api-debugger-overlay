@@ -8,6 +8,7 @@ export interface RequestEntry {
   requestSize: number
   responseSize: number
   requestHeaders: Record<string, string>
+  requestBody: string | null
   responseBody: string | null
   isDuplicate: boolean
   isSlow: boolean
@@ -17,7 +18,42 @@ export interface RequestEntry {
   ttfb: number
 }
 
+export interface ReplayRequest {
+  id: string
+  method: string
+  url: string
+  headers: Record<string, string>
+  body: string | null
+  originalResponseBody: string | null
+}
+
+export interface ReplayResult {
+  status: number
+  duration: number
+  responseBody: string | null
+  responseHeaders: Record<string, string>
+}
+
 export type ExtensionMessage =
   | { type: 'REQUEST_COMPLETE'; payload: RequestEntry }
+  | { type: 'REQUEST_UPDATED'; payload: RequestEntry }
   | { type: 'REQUEST_FAILED'; payload: { url: string; error: string } }
   | { type: 'CLEAR_SESSION' }
+  | { type: 'GET_SESSION'; tabId?: number }
+  | { type: 'SESSION_UPDATED'; tabId: number; payload: RequestEntry[] }
+  | { type: 'SELECT_REPLAY'; payload: ReplayRequest }
+  | { type: 'GET_REPLAY_TARGET'; tabId?: number }
+  | { type: 'REPLAY_TARGET_SELECTED'; tabId: number; payload: ReplayRequest }
+  | { type: 'RUN_REPLAY'; tabId: number; payload: ReplayRequest }
+  | { type: 'EXECUTE_REPLAY'; payload: ReplayRequest }
+  | { type: 'OPEN_SIDE_PANEL' }
+
+export interface SessionSnapshot {
+  tabId: number | null
+  requests: RequestEntry[]
+}
+
+export interface ReplayTargetSnapshot {
+  tabId: number | null
+  request: ReplayRequest | null
+}

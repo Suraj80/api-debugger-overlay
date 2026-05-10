@@ -1,27 +1,120 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { RequestEntry } from '../shared/types'
+import type { Root } from 'react-dom/client'
+import type { ReplayRequest, ReplayResult, ReplayTargetSnapshot, RequestEntry, SessionSnapshot } from '../shared/types'
 import '../index.css'
 
 type Tab = 'session' | 'deps' | 'replay'
 type DiffLine = { text: string; kind: 'same' | 'add' | 'del' }
+type SessionUpdatedMessage = {
+  type: 'SESSION_UPDATED'
+  tabId: number
+  payload: RequestEntry[]
+}
+type ReplayTargetSelectedMessage = {
+  type: 'REPLAY_TARGET_SELECTED'
+  tabId: number
+  payload: ReplayRequest
+}
 
-const SAMPLE_REQUESTS: RequestEntry[] = [
-  createSampleRequest('/api/users', 'GET', 200, 142),
-  createSampleRequest('/api/users/42', 'GET', 200, 486, ['/api/users']),
-  createSampleRequest('/api/orders?user=42', 'GET', 200, 860, ['/api/users/42']),
-  createSampleRequest('/api/recommendations', 'POST', 201, 1710, ['/api/users/42']),
-  createSampleRequest('/api/billing/session', 'GET', 500, 1320),
-]
+declare global {
+  interface Window {
+    __apiDebuggerSidePanelRoot?: Root
+  }
+}
+
+function isSessionUpdatedMessage(message: unknown): message is SessionUpdatedMessage {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'type' in message &&
+    (message as { type?: unknown }).type === 'SESSION_UPDATED' &&
+    'tabId' in message &&
+    'payload' in message
+  )
+}
+
+function isReplayTargetSelectedMessage(message: unknown): message is ReplayTargetSelectedMessage {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'type' in message &&
+    (message as { type?: unknown }).type === 'REPLAY_TARGET_SELECTED' &&
+    'tabId' in message &&
+    'payload' in message
+  )
+}
 
 export function SidePanel() {
   const [tab, setTab] = useState<Tab>('session')
-  const [requests] = useState<RequestEntry[]>(SAMPLE_REQUESTS)
+  const [sessionTabId, setSessionTabId] = useState<number | null>(null)
+  const [requests, setRequests] = useState<RequestEntry[]>([])
+  const [replayTarget, setReplayTarget] = useState<ReplayRequest | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadSession = () => {
+      chrome.runtime.sendMessage({ type: 'GET_SESSION' }).then((snapshot: SessionSnapshot | undefined) => {
+        if (cancelled || !snapshot) return
+
+        setSessionTabId(snapshot.tabId)
+        setRequests(snapshot.requests)
+      }).catch(() => {
+        if (cancelled) return
+
+        setSessionTabId(null)
+        setRequests([])
+      })
+
+      chrome.runtime.sendMessage({ type: 'GET_REPLAY_TARGET' }).then((snapshot: ReplayTargetSnapshot | undefined) => {
+        if (cancelled || !snapshot) return
+
+        setSessionTabId(currentTabId => currentTabId ?? snapshot.tabId)
+        setReplayTarget(snapshot.request)
+      }).catch(() => {
+        if (!cancelled) setReplayTarget(null)
+      })
+    }
+
+    const handleMessage = (message: unknown) => {
+      if (isReplayTargetSelectedMessage(message)) {
+        setSessionTabId(message.tabId)
+        setReplayTarget(message.payload)
+        setTab('replay')
+        return
+      }
+
+      if (!isSessionUpdatedMessage(message)) return
+
+      setSessionTabId(currentTabId => {
+        if (currentTabId === message.tabId || currentTabId == null) {
+          setRequests(message.payload)
+          return message.tabId
+        }
+
+        return currentTabId
+      })
+    }
+
+    loadSession()
+    chrome.runtime.onMessage.addListener(handleMessage)
+    window.addEventListener('focus', loadSession)
+    document.addEventListener('visibilitychange', loadSession)
+
+    return () => {
+      cancelled = true
+      chrome.runtime.onMessage.removeListener(handleMessage)
+      window.removeEventListener('focus', loadSession)
+      document.removeEventListener('visibilitychange', loadSession)
+    }
+  }, [])
 
   return (
     <div className="api-theme-shell api-sidepanel">
       <header className="api-sidepanel-header">
         <span className="api-sidepanel-title">API Debugger</span>
+        {sessionTabId != null && <span className="api-muted">Tab {sessionTabId}</span>}
         <button className="api-sidepanel-close" title="Close">x</button>
       </header>
 
@@ -44,7 +137,7 @@ export function SidePanel() {
       <main className="api-sidepanel-content api-scroll">
         {tab === 'session' && <SessionTab requests={requests} />}
         {tab === 'deps' && <DependencyTab requests={requests} />}
-        {tab === 'replay' && <ReplayTab />}
+        {tab === 'replay' && <ReplayTab key={replayTarget?.id ?? 'empty-replay'} tabId={sessionTabId} request={replayTarget} />}
       </main>
     </div>
   )
@@ -59,18 +152,26 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
   const avgColor = avg < 500 ? 'var(--api-success)' : avg < 1500 ? 'var(--api-warning)' : 'var(--api-danger)'
   const errColor = errorRate === 0 ? 'var(--api-success)' : errorRate <= 5 ? 'var(--api-warning)' : 'var(--api-danger)'
 
-  const byEndpoint = new Map<string, { method: string; url: string; total: number; count: number }>()
+  const byEndpoint = new Map<string, { method: string; url: string; total: number; ttfbTotal: number; ttfbCount: number; count: number }>()
   requests.forEach(request => {
     const path = getPath(request.url)
     const key = `${request.method} ${path}`
-    const entry = byEndpoint.get(key) ?? { method: request.method, url: path, total: 0, count: 0 }
+    const entry = byEndpoint.get(key) ?? { method: request.method, url: path, total: 0, ttfbTotal: 0, ttfbCount: 0, count: 0 }
     entry.total += request.duration
+    if (request.ttfb > 0) {
+      entry.ttfbTotal += request.ttfb
+      entry.ttfbCount += 1
+    }
     entry.count += 1
     byEndpoint.set(key, entry)
   })
 
   const worst = Array.from(byEndpoint.values())
-    .map(entry => ({ ...entry, avg: Math.round(entry.total / entry.count) }))
+    .map(entry => ({
+      ...entry,
+      avg: Math.round(entry.total / entry.count),
+      avgTtfb: entry.ttfbCount > 0 ? Math.round(entry.ttfbTotal / entry.ttfbCount) : 0,
+    }))
     .sort((a, b) => b.avg - a.avg)
     .slice(0, 5)
 
@@ -95,6 +196,9 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
             <span className="api-offender-index">{index + 1}</span>
             <MethodPill method={entry.method} />
             <span className="api-offender-path">{entry.url}</span>
+            <span style={{ color: 'var(--api-text-subtle)', fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>
+              TTFB {entry.avgTtfb > 0 ? formatMs(entry.avgTtfb) : '-'}
+            </span>
             <span style={{ color: 'var(--api-danger)', fontSize: 12, fontWeight: 750 }}>{formatMs(entry.avg)}</span>
           </div>
         ))}
@@ -213,26 +317,62 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
   )
 }
 
-function ReplayTab() {
-  const [method, setMethod] = useState('GET')
-  const [url, setUrl] = useState('https://api.example.com/users/42')
-  const [headers, setHeaders] = useState<{ k: string; v: string }[]>([{ k: 'Authorization', v: 'Bearer ...' }])
-  const [body, setBody] = useState('{\n  "name": "Ada"\n}')
+function headersToRows(headers: Record<string, string>) {
+  const rows = Object.entries(headers).map(([k, v]) => ({ k, v }))
+  return rows.length > 0 ? rows : [{ k: '', v: '' }]
+}
+
+function rowsToHeaders(rows: { k: string; v: string }[]) {
+  return rows.reduce<Record<string, string>>((acc, row) => {
+    const key = row.k.trim()
+    if (key) acc[key] = row.v
+    return acc
+  }, {})
+}
+
+function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRequest | null }) {
+  const [method, setMethod] = useState(request?.method ?? 'GET')
+  const [url, setUrl] = useState(request?.url ?? '')
+  const [headers, setHeaders] = useState<{ k: string; v: string }[]>(headersToRows(request?.headers ?? {}))
+  const [body, setBody] = useState(request?.body ?? '')
   const [sending, setSending] = useState(false)
-  const [showDiff, setShowDiff] = useState(false)
+  const [result, setResult] = useState<ReplayResult | null>(null)
   const lineNumbers = body.split('\n').map((_, index) => index + 1)
 
   const send = () => {
+    if (!tabId || !url) return
+
     setSending(true)
-    window.setTimeout(() => {
+    setResult(null)
+
+    chrome.runtime.sendMessage({
+      type: 'RUN_REPLAY',
+      tabId,
+      payload: {
+        id: request?.id ?? crypto.randomUUID(),
+        method,
+        url,
+        headers: rowsToHeaders(headers),
+        body: body.trim() ? body : null,
+        originalResponseBody: request?.originalResponseBody ?? null,
+      },
+    }).then((replayResult: ReplayResult) => {
+      setResult(replayResult)
+    }).catch(error => {
+      setResult({
+        status: 0,
+        duration: 0,
+        responseBody: String(error),
+        responseHeaders: {},
+      })
+    }).finally(() => {
       setSending(false)
-      setShowDiff(true)
-    }, 900)
+    })
   }
 
   const diff = computeDiff(
-    '{\n  "id": 42,\n  "name": "Ada",\n  "email": "ada@old.com",\n  "active": true\n}',
-    '{\n  "id": 42,\n  "name": "Ada",\n  "email": "ada@new.com",\n  "role": "admin",\n  "active": true\n}',
+    request?.originalResponseBody ?? '',
+    result?.responseBody ?? '',
   )
 
   return (
@@ -284,21 +424,32 @@ function ReplayTab() {
         </div>
       </div>
 
-      <button className="api-primary-wide" onClick={send} disabled={sending}>
+      <button className="api-primary-wide" onClick={send} disabled={sending || !tabId || !url}>
         {sending && <span className="api-spinner" />}
-        Send Request
+        {sending ? 'Sending...' : 'Send Request'}
       </button>
 
-      {showDiff ? (
-        <div className="api-diff-grid">
-          <DiffPanel title="Original Response" lines={diff.left} />
-          <DiffPanel title="New Response" lines={diff.right} />
-        </div>
-      ) : (
+      {!request && !result ? (
         <div className="api-replay-empty">
           <span style={{ color: 'var(--api-border-strong)', fontSize: 32 }}>↻</span>
           <div style={{ fontSize: 13 }}>No replay yet</div>
-          <div style={{ color: 'var(--api-border-strong)', fontSize: 11 }}>Right-click any request in the overlay.</div>
+          <div style={{ color: 'var(--api-border-strong)', fontSize: 11 }}>Click Replay on a captured request in the overlay.</div>
+        </div>
+      ) : result ? (
+        <>
+          <div className="api-muted">
+            Replayed with status {result.status || 'failed'} in {formatMs(result.duration)}
+          </div>
+          <div className="api-diff-grid">
+            <DiffPanel title="Original Response" lines={diff.left} />
+            <DiffPanel title="Replay Response" lines={diff.right} />
+          </div>
+        </>
+      ) : (
+        <div className="api-replay-empty">
+          <span style={{ color: 'var(--api-border-strong)', fontSize: 32 }}>↻</span>
+          <div style={{ fontSize: 13 }}>Ready to replay</div>
+          <div style={{ color: 'var(--api-border-strong)', fontSize: 11 }}>Edit the request and send it from the original tab.</div>
         </div>
       )}
     </div>
@@ -463,27 +614,6 @@ function computeDiff(a: string, b: string): { left: DiffLine[]; right: DiffLine[
   }
 }
 
-function createSampleRequest(path: string, method: string, status: number, duration: number, dependsOn: string[] = []): RequestEntry {
-  return {
-    id: `${method}-${path}-${duration}`,
-    url: `https://api.example.com${path}`,
-    method,
-    status,
-    duration,
-    startTime: performance.now(),
-    requestSize: 128,
-    responseSize: 2048,
-    requestHeaders: { Accept: 'application/json' },
-    responseBody: '{"ok":true}',
-    isDuplicate: false,
-    isSlow: duration > 1500,
-    aiSuggestion: null,
-    dependsOn: dependsOn.map(item => `https://api.example.com${item}`),
-    fingerprint: `${method}:${path}`,
-    ttfb: Math.round(duration * 0.4),
-  }
-}
-
 function getPath(url: string) {
   try {
     return new URL(url).pathname
@@ -502,4 +632,7 @@ function latencyColor(ms: number) {
   return 'var(--api-danger)'
 }
 
-createRoot(document.getElementById('root')!).render(<SidePanel />)
+const rootElement = document.getElementById('root')!
+const root = window.__apiDebuggerSidePanelRoot ?? createRoot(rootElement)
+window.__apiDebuggerSidePanelRoot = root
+root.render(<SidePanel />)

@@ -1,8 +1,16 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
+import { DEFAULT_SETTINGS, getSettings, saveSettings } from '../shared/settings'
 import '../index.css'
 
 type TestState = 'idle' | 'loading' | 'ok' | 'err'
+
+declare global {
+  interface Window {
+    __apiDebuggerPopupRoot?: Root
+  }
+}
 
 export function Popup() {
   const [capturing, setCapturing] = useState(true)
@@ -15,6 +23,36 @@ export function Popup() {
   const [testState, setTestState] = useState<TestState>('idle')
   const [position, setPosition] = useState('Bottom Right')
   const [showOnLoad, setShowOnLoad] = useState(true)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    getSettings().then(settings => {
+      setCapturing(settings.captureEnabled)
+      setCaptureFetch(settings.captureFetch)
+      setCaptureXHR(settings.captureXHR)
+      setSlowMs(settings.slowRequestThresholdMs)
+      setLargeKb(settings.largePayloadThresholdKb)
+      setApiKey(settings.apiKey)
+      setPosition(settings.overlayPosition)
+      setShowOnLoad(settings.showOverlayOnLoad)
+      setLoaded(true)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!loaded) return
+
+    saveSettings({
+      captureEnabled: capturing,
+      captureFetch,
+      captureXHR,
+      slowRequestThresholdMs: slowMs,
+      largePayloadThresholdKb: largeKb,
+      apiKey,
+      overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
+      showOverlayOnLoad: showOnLoad,
+    })
+  }, [apiKey, captureFetch, captureXHR, capturing, largeKb, loaded, position, showOnLoad, slowMs])
 
   const testConnection = () => {
     setTestState('loading')
@@ -24,16 +62,16 @@ export function Popup() {
   }
 
   const resetDefaults = () => {
-    setCapturing(true)
-    setCaptureFetch(true)
-    setCaptureXHR(true)
-    setSlowMs(1500)
-    setLargeKb(500)
-    setApiKey('')
+    setCapturing(DEFAULT_SETTINGS.captureEnabled)
+    setCaptureFetch(DEFAULT_SETTINGS.captureFetch)
+    setCaptureXHR(DEFAULT_SETTINGS.captureXHR)
+    setSlowMs(DEFAULT_SETTINGS.slowRequestThresholdMs)
+    setLargeKb(DEFAULT_SETTINGS.largePayloadThresholdKb)
+    setApiKey(DEFAULT_SETTINGS.apiKey)
     setShowKey(false)
     setTestState('idle')
-    setPosition('Bottom Right')
-    setShowOnLoad(true)
+    setPosition(DEFAULT_SETTINGS.overlayPosition)
+    setShowOnLoad(DEFAULT_SETTINGS.showOverlayOnLoad)
   }
 
   return (
@@ -199,4 +237,7 @@ function SliderRow({
   )
 }
 
-createRoot(document.getElementById('root')!).render(<Popup />)
+const rootElement = document.getElementById('root')!
+const root = window.__apiDebuggerPopupRoot ?? createRoot(rootElement)
+window.__apiDebuggerPopupRoot = root
+root.render(<Popup />)
