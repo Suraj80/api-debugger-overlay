@@ -24,6 +24,7 @@ export function Popup() {
   const [position, setPosition] = useState('Bottom Right')
   const [showOnLoad, setShowOnLoad] = useState(true)
   const [loaded, setLoaded] = useState(false)
+  const debouncedApiKey = useDebounce(apiKey, 500)
 
   useEffect(() => {
     getSettings().then(settings => {
@@ -48,17 +49,38 @@ export function Popup() {
       captureXHR,
       slowRequestThresholdMs: slowMs,
       largePayloadThresholdKb: largeKb,
-      apiKey,
+      apiKey: debouncedApiKey,
       overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
       showOverlayOnLoad: showOnLoad,
     })
-  }, [apiKey, captureFetch, captureXHR, capturing, largeKb, loaded, position, showOnLoad, slowMs])
+  }, [captureFetch, captureXHR, capturing, debouncedApiKey, largeKb, loaded, position, showOnLoad, slowMs])
 
-  const testConnection = () => {
+  const testConnection = async () => {
+    if (!apiKey.trim()) {
+      setTestState('err')
+      return
+    }
+
     setTestState('loading')
-    window.setTimeout(() => {
-      setTestState(apiKey.startsWith('sk-') ? 'ok' : 'err')
-    }, 900)
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey.trim(),
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      })
+      setTestState(res.ok ? 'ok' : 'err')
+    } catch {
+      setTestState('err')
+    }
   }
 
   const resetDefaults = () => {
@@ -164,11 +186,24 @@ export function Popup() {
       </main>
 
       <footer className="api-popup-footer">
-        <span className="api-popup-version">v1.0.0</span>
+        <span className="api-popup-version">
+          v{chrome.runtime.getManifest().version}
+        </span>
         <button className="api-reset-button" onClick={resetDefaults}>Reset to defaults</button>
       </footer>
     </div>
   )
+}
+
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = React.useState(value)
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+
+  return debounced
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

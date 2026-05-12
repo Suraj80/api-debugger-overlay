@@ -73,11 +73,14 @@ function rememberRequest(tabId: number, request: RequestEntry) {
   const group = groups.get(request.fingerprint)
   const duplicateCount = (group?.count ?? 0) + 1
   const duplicateOf = group?.firstRequestId ?? null
+  const previousRequests = getSession(tabId)
+  const dependsOn = inferDependencies(request, previousRequests)
   const requestWithDuplicateInfo: RequestEntry = {
     ...request,
     isDuplicate: duplicateOf != null,
     duplicateOf,
     duplicateCount,
+    dependsOn,
   }
   groups.set(request.fingerprint, {
     firstRequestId: group?.firstRequestId ?? request.id,
@@ -87,7 +90,6 @@ function rememberRequest(tabId: number, request: RequestEntry) {
   const requestWithNetworkStatus = networkEvent && networkEvent.status !== requestWithDuplicateInfo.status
     ? { ...requestWithDuplicateInfo, status: networkEvent.status }
     : requestWithDuplicateInfo
-  const previousRequests = getSession(tabId)
   const requestsWithUpdatedGroup = previousRequests.map(entry => (
     entry.fingerprint === requestWithNetworkStatus.fingerprint
       ? {
@@ -106,11 +108,79 @@ function rememberRequest(tabId: number, request: RequestEntry) {
   requestReceivedAt.set(requestWithNetworkStatus.id, receivedAt)
   sessionsByTab.set(tabId, requests)
   publishSession(tabId)
+  chrome.runtime.sendMessage({
+    type: 'DEPENDENCIES_UPDATED',
+    payload: {
+      requestId: requestWithNetworkStatus.id,
+      dependsOn: requestWithNetworkStatus.dependsOn,
+    },
+  }).catch(() => {
+    // No extension page is currently listening.
+  })
 
   return {
     request: requestWithNetworkStatus,
     updatedRequests: requestsWithUpdatedGroup.filter(entry => entry.fingerprint === requestWithNetworkStatus.fingerprint),
   }
+}
+
+function inferDependencies(
+  newRequest: RequestEntry,
+  existingRequests: RequestEntry[],
+): string[] {
+  const dependsOn: string[] = []
+  const newStart = newRequest.startTime
+
+  for (const existing of existingRequests) {
+    if (existing.id === newRequest.id) continue
+
+    const existingEnd = existing.startTime + existing.duration
+    const timingMatch =
+      newStart >= existingEnd &&
+      newStart <= existingEnd + 800
+
+    if (!timingMatch) continue
+    if (!existing.responseBody) continue
+
+    let sharedValue = false
+    try {
+      const values = extractLeafValues(JSON.parse(existing.responseBody))
+      for (const val of values) {
+        if (
+          val.length > 4 &&
+          (
+            newRequest.url.includes(val) ||
+            (newRequest.requestBody ?? '').includes(val)
+          )
+        ) {
+          sharedValue = true
+          break
+        }
+      }
+    } catch {
+      continue
+    }
+
+    if (sharedValue) {
+      dependsOn.push(existing.id)
+    }
+  }
+
+  return dependsOn
+}
+
+function extractLeafValues(obj: unknown, depth = 0): string[] {
+  if (depth > 6) return []
+  if (typeof obj === 'string' || typeof obj === 'number') {
+    return [String(obj)]
+  }
+  if (Array.isArray(obj)) {
+    return obj.flatMap(item => extractLeafValues(item, depth + 1))
+  }
+  if (obj && typeof obj === 'object') {
+    return Object.values(obj).flatMap(v => extractLeafValues(v, depth + 1))
+  }
+  return []
 }
 
 function findRecentNetworkEvent(tabId: number, method: string, url: string, now = Date.now()) {

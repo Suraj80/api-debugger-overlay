@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { RequestEntry } from '../shared/types'
 import type { ApiDebuggerSettings } from '../shared/settings'
+import { useSettings } from '../shared/SettingsContext'
+import { sendRuntimeMessage } from '../shared/sendMessage'
 
 interface RequestCompleteMessage {
   type: 'REQUEST_COMPLETE'
@@ -15,11 +17,7 @@ interface RequestUpdatedMessage {
 type OverlayState = 'feed' | 'paused' | 'minimised'
 type JsonExpandMode = 'all' | 'none' | null
 type JsonTab = 'response' | 'request'
-type AISuggestionState = 'idle' | 'loading' | 'result'
-
-interface OverlayProps {
-  settings: ApiDebuggerSettings
-}
+type AISuggestionState = 'idle' | 'loading' | 'result' | 'error'
 
 function isRequestCompleteMessage(msg: unknown): msg is RequestCompleteMessage {
   return (
@@ -955,11 +953,13 @@ function Sparkline({ requests }: { requests: RequestEntry[] }) {
 function AICard({
   state,
   text,
+  error,
   url,
   onDismiss,
 }: {
   state: AISuggestionState
   text?: string
+  error?: string
   url: string
   onDismiss: () => void
 }) {
@@ -974,6 +974,22 @@ function AICard({
         </div>
         <div style={{ height: 10, width: '90%', borderRadius: 4, marginTop: 10, background: 'var(--api-surface-raised)' }} />
         <div style={{ height: 10, width: '72%', borderRadius: 4, marginTop: 6, background: 'var(--api-surface-raised)' }} />
+      </div>
+    )
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="apidbg-ai-card">
+        <div className="apidbg-ai-title">
+          <span style={{ color: 'var(--api-danger)', fontSize: 14 }}>!</span>
+          <span style={{ color: 'var(--api-text)', fontSize: 13, fontWeight: 700 }}>AI Diagnosis</span>
+          <span title={url} style={{ marginLeft: 'auto', color: 'var(--api-text-subtle)', fontSize: 11, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</span>
+        </div>
+        <div className="apidbg-ai-text">{error ?? 'Unknown error. Check your API key.'}</div>
+        <div className="apidbg-ai-footer">
+          <button className="apidbg-plain-button" onClick={onDismiss} style={{ marginLeft: 'auto' }}>Dismiss</button>
+        </div>
       </div>
     )
   }
@@ -1009,11 +1025,14 @@ function AICard({
 }
 
 function RequestRow({ req }: { req: RequestEntry }) {
+  const settings = useSettings()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<JsonTab>('response')
   const [search, setSearch] = useState('')
   const [forceExpand, setForceExpand] = useState<JsonExpandMode>(null)
   const [aiState, setAiState] = useState<AISuggestionState>('idle')
+  const [aiSuggestion, setAiSuggestion] = useState('')
+  const [aiError, setAiError] = useState('')
   const [copied, setCopied] = useState(false)
 
   const path = useMemo(() => getPath(req.url), [req.url])
@@ -1031,9 +1050,62 @@ function RequestRow({ req }: { req: RequestEntry }) {
 
   const jsonValue = tab === 'response' ? parsedBody ?? { body: null } : requestObj
 
-  const triggerAI = () => {
+  const triggerAI = async () => {
+    if (!settings.apiKey) {
+      setAiState('error')
+      setAiError('API key not configured. Add your Anthropic key in settings.')
+      return
+    }
+
     setAiState('loading')
-    window.setTimeout(() => setAiState('result'), 800)
+    setAiError('')
+
+    try {
+      const sanitizedUrl = req.url
+        .replace(/\/\d+/g, '/:id')
+        .replace(/[?&][^=]+=\d+/g, '')
+
+      const prompt = [
+        `An API request was flagged as ${req.isSlow ? 'slow' : 'failed'}.`,
+        `Method: ${req.method}`,
+        `Endpoint: ${sanitizedUrl}`,
+        `Status: ${req.status}`,
+        `Duration: ${req.duration}ms`,
+        `TTFB: ${req.ttfb}ms`,
+        `Response size: ${req.responseSize} bytes`,
+        req.isDuplicate ? `This endpoint was called ${req.duplicateCount} times this session.` : '',
+        '',
+        'In 2-3 sentences, diagnose the most likely cause and suggest one specific fix.',
+        'Be concrete. Do not give generic advice.',
+      ].filter(Boolean).join('\n')
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': settings.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 300,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      })
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({})) as { error?: { message?: string } }
+        throw new Error(err.error?.message ?? `API error ${response.status}`)
+      }
+
+      const data = await response.json() as { content?: Array<{ text?: string }> }
+      const suggestion = data.content?.[0]?.text ?? 'No suggestion returned.'
+      setAiSuggestion(suggestion)
+      setAiState('result')
+    } catch (err: unknown) {
+      setAiState('error')
+      setAiError(err instanceof Error ? err.message : 'Unknown error. Check your API key.')
+    }
   }
 
   return (
@@ -1045,7 +1117,22 @@ function RequestRow({ req }: { req: RequestEntry }) {
         <Duration ms={req.duration} />
         {req.duplicateCount > 1 && <DupBadge count={req.duplicateCount} />}
         {req.isSlow && <SlowBadge />}
-        <span className={`apidbg-chevron${open ? ' is-open' : ''}`}>v</span>
+        <svg
+          className={`apidbg-chevron${open ? ' is-open' : ''}`}
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M2 4L6 8L10 4"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </div>
 
       {open && (
@@ -1127,7 +1214,7 @@ function RequestRow({ req }: { req: RequestEntry }) {
             <button
               className="apidbg-secondary-button"
               onClick={() => {
-                sendRuntimeMessage({
+                void sendRuntimeMessage({
                   type: 'SELECT_REPLAY',
                   payload: {
                     id: req.id,
@@ -1147,7 +1234,8 @@ function RequestRow({ req }: { req: RequestEntry }) {
           <AICard
             state={aiState}
             url={path}
-            text={req.aiSuggestion ?? 'This endpoint shows signs worth checking: possible N+1 calls, over-fetching, waterfall latency, or missing pagination.'}
+            text={aiSuggestion || req.aiSuggestion || 'No suggestion returned.'}
+            error={aiError}
             onDismiss={() => setAiState('idle')}
           />
         </div>
@@ -1173,19 +1261,8 @@ function positionClass(position: ApiDebuggerSettings['overlayPosition']) {
   return `is-${position.toLowerCase().replaceAll(' ', '-')}`
 }
 
-function sendRuntimeMessage(message: unknown) {
-  try {
-    if (!chrome.runtime?.id) return
-
-    chrome.runtime.sendMessage(message).catch(() => {
-      // Extension context may be unavailable after a reload.
-    })
-  } catch {
-    // Stale content scripts can remain on long-lived pages after extension reloads.
-  }
-}
-
-export function Overlay({ settings }: OverlayProps) {
+export function Overlay() {
+  const settings = useSettings()
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [state, setState] = useState<OverlayState>(settings.showOverlayOnLoad ? 'feed' : 'minimised')
   const [sweep, setSweep] = useState(false)
@@ -1227,7 +1304,7 @@ export function Overlay({ settings }: OverlayProps) {
   const overlayPositionClass = positionClass(settings.overlayPosition)
 
   const openSidePanel = () => {
-    sendRuntimeMessage({ type: 'OPEN_SIDE_PANEL' })
+    void sendRuntimeMessage({ type: 'OPEN_SIDE_PANEL' })
   }
 
   if (state === 'minimised') {
@@ -1313,7 +1390,7 @@ export function Overlay({ settings }: OverlayProps) {
                 setSweep(true)
                 window.setTimeout(() => {
                   setRequests([])
-                  sendRuntimeMessage({ type: 'CLEAR_SESSION' })
+                  void sendRuntimeMessage({ type: 'CLEAR_SESSION' })
                   setSweep(false)
                 }, 300)
               }}

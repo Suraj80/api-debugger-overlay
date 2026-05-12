@@ -1,28 +1,26 @@
+import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Overlay } from './Overlay'
-import { API_DEBUGGER_SETTINGS_KEY, getSettings, normalizeSettings, type ApiDebuggerSettings } from '../shared/settings'
+import { getSettings, type ApiDebuggerSettings } from '../shared/settings'
+import { isExtensionContextValid } from '../shared/extensionGuard'
+import { sendRuntimeMessage } from '../shared/sendMessage'
+import { SettingsProvider, useUpdateSettings } from '../shared/SettingsContext'
 import type { ReplayRequest, ReplayResult } from '../shared/types'
 
 const replayRequests = new Map<string, (result: ReplayResult) => void>()
+let settingsUpdater: ((s: ApiDebuggerSettings) => void) | null = null
 
-function isExtensionContextValid() {
-  try {
-    return Boolean(chrome.runtime?.id)
-  } catch {
-    return false
-  }
-}
+export function App() {
+  const updateSettings = useUpdateSettings()
 
-function sendRuntimeMessage(message: unknown) {
-  if (!isExtensionContextValid()) return
+  useEffect(() => {
+    settingsUpdater = updateSettings
+    return () => {
+      settingsUpdater = null
+    }
+  }, [updateSettings])
 
-  try {
-    chrome.runtime.sendMessage(message).catch(() => {
-      // The extension may have reloaded while this content script was still alive.
-    })
-  } catch {
-    // Ignore stale content scripts after extension reloads.
-  }
+  return <Overlay />
 }
 
 function postSettingsToPage(settings: ApiDebuggerSettings) {
@@ -69,7 +67,7 @@ async function start() {
       return
     }
 
-    sendRuntimeMessage(event.data)
+    void sendRuntimeMessage(event.data)
   })
 
   if (isExtensionContextValid()) {
@@ -120,17 +118,23 @@ async function start() {
   shadow.appendChild(mountPoint)
 
   const root = createRoot(mountPoint)
-  root.render(<Overlay settings={settings} />)
+  root.render(
+    <SettingsProvider initialSettings={settings}>
+      <App />
+    </SettingsProvider>,
+  )
 
   try {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
+    chrome.storage.onChanged.addListener((_changes, areaName) => {
       if (areaName !== 'local' && areaName !== 'sync') return
-      const change = changes[API_DEBUGGER_SETTINGS_KEY]
-      if (!change) return
 
-      settings = normalizeSettings(change.newValue as Partial<ApiDebuggerSettings> | undefined)
-      postSettingsToPage(settings)
-      root.render(<Overlay settings={settings} />)
+      getSettings().then(updated => {
+        settings = updated
+        postSettingsToPage(settings)
+        settingsUpdater?.(settings)
+      }).catch(() => {
+        // Ignore stale content scripts after extension reloads.
+      })
     })
   } catch {
     // Storage events are unavailable after an extension reload invalidates this script.

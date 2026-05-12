@@ -43,6 +43,7 @@ export type ExtensionMessage =
   | { type: 'CLEAR_SESSION' }
   | { type: 'GET_SESSION'; tabId?: number }
   | { type: 'SESSION_UPDATED'; tabId: number; payload: RequestEntry[] }
+  | { type: 'DEPENDENCIES_UPDATED'; payload: { requestId: string; dependsOn: string[] } }
   | { type: 'SELECT_REPLAY'; payload: ReplayRequest }
   | { type: 'GET_REPLAY_TARGET'; tabId?: number }
   | { type: 'REPLAY_TARGET_SELECTED'; tabId: number; payload: ReplayRequest }

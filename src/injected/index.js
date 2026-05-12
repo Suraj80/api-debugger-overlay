@@ -15,9 +15,23 @@ const DEFAULT_SETTINGS = {
 }
 let settings = { ...DEFAULT_SETTINGS }
 const xhrMeta = new WeakMap()
+const MAX_FINGERPRINTS = 1000
 const seenFingerprints = new Set()
 const performanceEntries = []
 const MAX_PERFORMANCE_ENTRIES = 300
+
+function addFingerprint(fp) {
+  if (seenFingerprints.size >= MAX_FINGERPRINTS) {
+    const first = seenFingerprints.values().next().value
+    seenFingerprints.delete(first)
+  }
+
+  seenFingerprints.add(fp)
+}
+
+function hasFingerprint(fp) {
+  return seenFingerprints.has(fp)
+}
 
 function createRequestEntry({
   url,
@@ -34,9 +48,9 @@ function createRequestEntry({
   ttfb = 0,
 }) {
   const fingerprint = createFingerprint(method, url, body)
-  const isDuplicate = seenFingerprints.has(fingerprint)
+  const isDuplicate = hasFingerprint(fingerprint)
 
-  seenFingerprints.add(fingerprint)
+  addFingerprint(fingerprint)
 
   return {
     id: crypto.randomUUID(),
@@ -52,7 +66,7 @@ function createRequestEntry({
     responseBody,
     isDuplicate,
     duplicateOf: null,
-    duplicateCount: isDuplicate ? 2 : 1,
+    duplicateCount: 1,
     isSlow: duration > settings.slowRequestThresholdMs,
     aiSuggestion: null,
     dependsOn: [],

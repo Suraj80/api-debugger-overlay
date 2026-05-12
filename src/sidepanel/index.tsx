@@ -16,6 +16,13 @@ type ReplayTargetSelectedMessage = {
   tabId: number
   payload: ReplayRequest
 }
+type DependenciesUpdatedMessage = {
+  type: 'DEPENDENCIES_UPDATED'
+  payload: {
+    requestId: string
+    dependsOn: string[]
+  }
+}
 
 declare global {
   interface Window {
@@ -41,6 +48,16 @@ function isReplayTargetSelectedMessage(message: unknown): message is ReplayTarge
     'type' in message &&
     (message as { type?: unknown }).type === 'REPLAY_TARGET_SELECTED' &&
     'tabId' in message &&
+    'payload' in message
+  )
+}
+
+function isDependenciesUpdatedMessage(message: unknown): message is DependenciesUpdatedMessage {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'type' in message &&
+    (message as { type?: unknown }).type === 'DEPENDENCIES_UPDATED' &&
     'payload' in message
   )
 }
@@ -82,6 +99,15 @@ export function SidePanel() {
         setSessionTabId(message.tabId)
         setReplayTarget(message.payload)
         setTab('replay')
+        return
+      }
+
+      if (isDependenciesUpdatedMessage(message)) {
+        setRequests(currentRequests => currentRequests.map(request => (
+          request.id === message.payload.requestId
+            ? { ...request, dependsOn: message.payload.dependsOn }
+            : request
+        )))
         return
       }
 
@@ -235,31 +261,51 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
 
 function DependencyTab({ requests }: { requests: RequestEntry[] }) {
   const { nodes, edges } = useMemo(() => {
-    const map = new Map<string, { id: string; label: string; count: number; totalLatency: number }>()
+    const requestById = new Map(requests.map(request => [request.id, request]))
+    const map = new Map<string, { id: string; label: string; count: number }>()
+    const edgeMap = new Map<string, { from: string; to: string; latency: number; count: number }>()
 
     requests.forEach(request => {
       const path = getPath(request.url)
-      const segments = path.split('/').filter(Boolean)
-      const label = `/${segments[segments.length - 1] ?? ''}`
-      const entry = map.get(path) ?? { id: path, label, count: 0, totalLatency: 0 }
+      const entry = map.get(path) ?? {
+        id: path,
+        label: getEndpointLabel(path),
+        count: 0,
+      }
       entry.count += 1
-      entry.totalLatency += request.duration
       map.set(path, entry)
     })
 
-    const edgeList: { from: string; to: string; latency: number }[] = []
     requests.forEach(request => {
       const to = getPath(request.url)
-      request.dependsOn.forEach(source => {
-        const from = getPath(source)
-        if (map.has(from) && map.has(to)) edgeList.push({ from, to, latency: request.duration })
+      request.dependsOn.forEach(sourceId => {
+        const source = requestById.get(sourceId)
+        if (!source) return
+
+        const from = getPath(source.url)
+        if (!map.has(from) || !map.has(to) || from === to) return
+
+        const key = `${from} -> ${to}`
+        const edge = edgeMap.get(key) ?? { from, to, latency: 0, count: 0 }
+        edge.latency += request.duration
+        edge.count += 1
+        edgeMap.set(key, edge)
       })
     })
 
-    return { nodes: Array.from(map.values()), edges: edgeList }
+    const edgeList = Array.from(edgeMap.values())
+      .map(edge => ({ ...edge, latency: Math.round(edge.latency / edge.count) }))
+      .sort((a, b) => b.count - a.count || b.latency - a.latency)
+
+    const connectedIds = new Set(edgeList.flatMap(edge => [edge.from, edge.to]))
+    const nodeList = Array.from(map.values())
+      .filter(node => connectedIds.has(node.id))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+
+    return { nodes: nodeList, edges: edgeList }
   }, [requests])
 
-  if (nodes.length < 2 || edges.length === 0) {
+  if (edges.length === 0) {
     return (
       <section className="api-sidepanel-section">
         <SectionHeading>API Dependency Graph</SectionHeading>
@@ -277,65 +323,110 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
   const height = 360
   const centerX = width / 2
   const centerY = height / 2
-  const positions = new Map<string, { x: number; y: number }>()
-
-  nodes.forEach((node, index) => {
-    const angle = (index / nodes.length) * Math.PI * 2
-    const radius = 130
-    positions.set(node.id, {
+  const radius = 122
+  const positions = new Map(nodes.map((node, index) => {
+    const angle = (index / nodes.length) * Math.PI * 2 - Math.PI / 2
+    return [node.id, {
       x: centerX + Math.cos(angle) * radius,
       y: centerY + Math.sin(angle) * radius,
-    })
-  })
+    }]
+  }))
 
   return (
     <section className="api-sidepanel-section">
       <SectionHeading>API Dependency Graph</SectionHeading>
       <p className="api-muted">Nodes = endpoints. Edges = inferred call chains. Node size = call frequency.</p>
-      <svg viewBox={`0 0 ${width} ${height}`} className="api-dependency-graph">
+      <svg viewBox={`0 0 ${width} ${height}`} className="api-dependency-graph" role="img" aria-label="API dependency graph">
+        <defs>
+          <marker id="api-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="var(--api-border-strong)" />
+          </marker>
+        </defs>
         {edges.map((edge, index) => {
           const start = positions.get(edge.from)
           const end = positions.get(edge.to)
           if (!start || !end) return null
           const color = latencyColor(edge.latency)
+
           return (
-            <line
-              key={index}
-              x1={start.x}
-              y1={start.y}
-              x2={end.x}
-              y2={end.y}
-              stroke={color}
-              strokeWidth="1.5"
-            />
+            <g key={`${edge.from}-${edge.to}-${index}`}>
+              <path
+                d={`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} L ${end.x.toFixed(1)} ${end.y.toFixed(1)}`}
+                fill="none"
+                stroke={color}
+                strokeWidth="1.6"
+                markerEnd="url(#api-arrow)"
+              />
+              <title>{getEndpointLabel(edge.from)} to {getEndpointLabel(edge.to)} - avg {formatMs(edge.latency)}</title>
+            </g>
           )
         })}
         {nodes.map(node => {
           const position = positions.get(node.id)
           if (!position) return null
-          const radius = Math.min(24, 8 + node.count * 2)
 
           return (
-            <g key={node.id}>
-              <circle cx={position.x} cy={position.y} r={radius} fill="var(--api-surface)" stroke="var(--api-color-primary-soft)" strokeWidth="1.5">
-                <title>{node.id}</title>
-              </circle>
-              <text x={position.x} y={position.y + radius + 12} fontSize="10" fill="var(--api-text-muted)" textAnchor="middle" fontFamily="ui-monospace, monospace">
-                {node.label}
-              </text>
-            </g>
+            <DependencyNode
+              key={node.id}
+              x={position.x}
+              y={position.y}
+              radius={Math.min(20, 8 + node.count * 1.5)}
+              label={node.label}
+              fullPath={node.id}
+              count={node.count}
+            />
           )
         })}
-        <g transform={`translate(8, ${height - 56})`} fontSize="10" fill="var(--api-text-subtle)">
-          <line x1="0" y1="6" x2="20" y2="6" stroke="var(--api-success)" strokeWidth="1.5" />
+        <g transform={`translate(12, ${height - 22})`} fontSize="10" fill="var(--api-text-subtle)">
+          <line x1="0" y1="6" x2="20" y2="6" stroke="#22C55E" strokeWidth="1.5" />
           <text x="26" y="9">Fast under 500ms</text>
-          <line x1="0" y1="22" x2="20" y2="22" stroke="var(--api-warning)" strokeWidth="1.5" />
-          <text x="26" y="25">Slow 500ms+</text>
-          <line x1="0" y1="38" x2="20" y2="38" stroke="var(--api-danger)" strokeWidth="1.5" />
-          <text x="26" y="41">Very slow 1.5s+</text>
+          <line x1="136" y1="6" x2="156" y2="6" stroke="#F59E0B" strokeWidth="1.5" />
+          <text x="162" y="9">Slow 500ms+</text>
+          <line x1="270" y1="6" x2="290" y2="6" stroke="#EF4444" strokeWidth="1.5" />
+          <text x="296" y="9">Very slow 1.5s+</text>
         </g>
       </svg>
+      <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+        {edges.slice(0, 8).map(edge => (
+          <div key={`${edge.from}-${edge.to}`} className="api-muted" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 8, alignItems: 'center', fontSize: 11 }}>
+            <span title={edge.from} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{getEndpointLabel(edge.from)}</span>
+            <span style={{ color: latencyColor(edge.latency), fontFamily: 'ui-monospace, monospace' }}>{'->'} {formatMs(edge.latency)}</span>
+            <span title={edge.to} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{getEndpointLabel(edge.to)}</span>
+          </div>
+        ))}
+      </div>
     </section>
+  )
+}
+
+function DependencyNode({
+  x,
+  y,
+  radius,
+  label,
+  fullPath,
+  count,
+}: {
+  x: number
+  y: number
+  radius: number
+  label: string
+  fullPath: string
+  count: number
+}) {
+  return (
+    <g>
+      <circle cx={x} cy={y} r={radius} fill="var(--api-surface)" stroke="var(--api-color-primary-soft)" strokeWidth="1.5">
+        <title>{fullPath}</title>
+      </circle>
+      <circle cx={x + radius - 2} cy={y - radius + 2} r="8" fill="var(--api-color-primary)" stroke="var(--api-bg)" strokeWidth="1.5" />
+      <text x={x + radius - 2} y={y - radius + 5} fill="var(--api-text)" fontSize="8" fontWeight="800" textAnchor="middle">
+        {count}
+      </text>
+      <text x={x} y={y + radius + 13} fill="var(--api-text)" fontSize="10" fontWeight="700" textAnchor="middle">
+        {label}
+      </text>
+    </g>
   )
 }
 
@@ -659,7 +750,7 @@ async function exportSessionReport(requests: RequestEntry[]) {
     }
 
     return filename
-  } catch (error) {
+  } catch {
     downloadWithAnchor(url, filename)
     return filename
   } finally {
@@ -956,11 +1047,28 @@ function buildLatencySvg(requests: RequestEntry[]) {
 
 function buildDependencySvg(requests: RequestEntry[]) {
   const paths = Array.from(new Set(requests.map(request => getPath(request.url))))
-  const edges = requests.flatMap(request => request.dependsOn.map(source => ({
-    from: getPath(source),
-    to: getPath(request.url),
-    latency: request.duration,
-  }))).filter(edge => paths.includes(edge.from) && paths.includes(edge.to))
+  const requestById = new Map(requests.map(request => [request.id, request]))
+  const edgeMap = new Map<string, { from: string; to: string; latency: number; count: number }>()
+
+  requests.forEach(request => {
+    const to = getPath(request.url)
+    request.dependsOn.forEach(sourceId => {
+      const source = requestById.get(sourceId)
+      if (!source) return
+
+      const from = getPath(source.url)
+      if (!paths.includes(from) || !paths.includes(to) || from === to) return
+
+      const key = `${from} -> ${to}`
+      const edge = edgeMap.get(key) ?? { from, to, latency: 0, count: 0 }
+      edge.latency += request.duration
+      edge.count += 1
+      edgeMap.set(key, edge)
+    })
+  })
+
+  const edges = Array.from(edgeMap.values())
+    .map(edge => ({ ...edge, latency: Math.round(edge.latency / edge.count) }))
 
   if (paths.length < 2 || edges.length === 0) {
     return '<div class="muted">No inferred dependencies were captured in this session.</div>'
@@ -984,16 +1092,18 @@ function buildDependencySvg(requests: RequestEntry[]) {
     const start = positions.get(edge.from)
     const end = positions.get(edge.to)
     if (!start || !end) return ''
-    return `<line x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke="${edge.latency >= 1500 ? '#ff8f8f' : edge.latency >= 500 ? '#ffd36f' : '#8fe6bc'}" stroke-width="1.5" />`
+    return `<line x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke="${latencyColor(edge.latency)}" stroke-width="1.5" />`
   }).join('')
   const nodes = paths.map(path => {
     const position = positions.get(path)!
     const count = counts.get(path) ?? 1
-    const nodeRadius = Math.min(26, 8 + count * 2)
+    const nodeRadius = Math.min(20, 8 + count * 1.5)
     return `<g>
       <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius}" fill="#292630" stroke="#cbb8ff" stroke-width="1.5">
         <title>${escapeHtml(path)}</title>
       </circle>
+      <circle cx="${(position.x + nodeRadius - 2).toFixed(1)}" cy="${(position.y - nodeRadius + 2).toFixed(1)}" r="8" fill="#8069bf" stroke="#121015" stroke-width="1.5" />
+      <text x="${(position.x + nodeRadius - 2).toFixed(1)}" y="${(position.y - nodeRadius + 5).toFixed(1)}" fill="#eee8f5" font-size="8" font-weight="800" text-anchor="middle">${count}</text>
       <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 14).toFixed(1)}" fill="#9c96a6" font-size="10" text-anchor="middle">${escapeHtml(trimMiddle(path, 26))}</text>
     </g>`
   }).join('')
@@ -1037,6 +1147,14 @@ function getPath(url: string) {
   }
 }
 
+function getEndpointLabel(path: string) {
+  const segments = path.split('/').filter(Boolean)
+  const usefulSegments = segments.slice(-2)
+  const label = usefulSegments.length > 0 ? `/${usefulSegments.join('/')}` : '/'
+
+  return trimMiddle(label, 32)
+}
+
 function formatMs(ms: number) {
   return ms > 999 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
@@ -1048,9 +1166,9 @@ function formatBytes(bytes: number) {
 }
 
 function latencyColor(ms: number) {
-  if (ms < 500) return 'var(--api-success)'
-  if (ms < 1500) return 'var(--api-warning)'
-  return 'var(--api-danger)'
+  if (ms < 500) return '#22C55E'
+  if (ms < 1500) return '#F59E0B'
+  return '#EF4444'
 }
 
 const rootElement = document.getElementById('root')!
