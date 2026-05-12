@@ -124,7 +124,7 @@ async function start() {
 
   try {
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== 'local') return
+      if (areaName !== 'local' && areaName !== 'sync') return
       const change = changes[API_DEBUGGER_SETTINGS_KEY]
       if (!change) return
 

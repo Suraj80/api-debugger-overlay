@@ -144,6 +144,7 @@ export function SidePanel() {
 }
 
 function SessionTab({ requests }: { requests: RequestEntry[] }) {
+  const [exportStatus, setExportStatus] = useState('')
   const total = requests.length
   const avg = total ? Math.round(requests.reduce((sum, r) => sum + r.duration, 0) / total) : 0
   const errors = requests.filter(r => r.status >= 400).length
@@ -205,7 +206,28 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
       </section>
 
       <section className="api-sidepanel-section">
-        <button className="api-primary-wide">Export Session Report</button>
+        <button
+          className="api-primary-wide"
+          onClick={() => {
+            setExportStatus('')
+            exportSessionReport(requests)
+              .then(filename => {
+                setExportStatus(`Saved ${filename}`)
+                window.setTimeout(() => setExportStatus(''), 3500)
+              })
+              .catch(error => {
+                setExportStatus(`Export failed: ${error instanceof Error ? error.message : String(error)}`)
+              })
+          }}
+          disabled={requests.length === 0}
+        >
+          Export Session Report
+        </button>
+        {exportStatus && (
+          <div className="api-muted" style={{ marginTop: 8, fontSize: 12 }}>
+            {exportStatus}
+          </div>
+        )}
       </section>
     </div>
   )
@@ -614,6 +636,399 @@ function computeDiff(a: string, b: string): { left: DiffLine[]; right: DiffLine[
   }
 }
 
+async function exportSessionReport(requests: RequestEntry[]) {
+  if (requests.length === 0) {
+    throw new Error('No requests captured yet.')
+  }
+
+  const html = buildSessionReportHtml(requests)
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z')
+  const filename = `api-debugger-session-${stamp}.html`
+
+  try {
+    if (chrome.downloads?.download) {
+      await chrome.downloads.download({
+        url,
+        filename,
+        saveAs: true,
+      })
+    } else {
+      downloadWithAnchor(url, filename)
+    }
+
+    return filename
+  } catch (error) {
+    downloadWithAnchor(url, filename)
+    return filename
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
+}
+
+function downloadWithAnchor(url: string, filename: string) {
+  const anchor = document.createElement('a')
+
+  anchor.href = url
+  anchor.download = filename
+  anchor.rel = 'noopener'
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
+function buildSessionReportHtml(requests: RequestEntry[]) {
+  const generatedAt = new Date()
+  const total = requests.length
+  const avg = total ? Math.round(requests.reduce((sum, request) => sum + request.duration, 0) / total) : 0
+  const errors = requests.filter(request => request.status >= 400).length
+  const errorRate = total ? Math.round((errors / total) * 1000) / 10 : 0
+  const duplicates = requests.filter(request => request.isDuplicate).length
+  const slowest = [...requests].sort((a, b) => b.duration - a.duration)[0]
+  const aiSuggestions = requests.filter(request => request.aiSuggestion)
+  const rows = requests.map(request => `
+    <tr>
+      <td><span class="method">${escapeHtml(request.method)}</span></td>
+      <td><span class="url">${escapeHtml(request.url)}</span></td>
+      <td class="${request.status >= 500 ? 'danger' : request.status >= 400 ? 'warning' : 'success'}">${request.status || '-'}</td>
+      <td>${formatMs(request.duration)}</td>
+      <td>${formatBytes(request.requestSize)}</td>
+      <td>${formatBytes(request.responseSize)}</td>
+      <td>${request.ttfb > 0 ? formatMs(request.ttfb) : '-'}</td>
+      <td>${request.isSlow ? '<span class="badge danger-bg">SLOW</span>' : ''}${request.duplicateCount > 1 ? `<span class="badge warn-bg">DUP x${request.duplicateCount}</span>` : ''}</td>
+      <td>${escapeHtml(new Date(request.startTime).toLocaleTimeString())}</td>
+    </tr>
+    <tr class="details-row">
+      <td colspan="9">
+        <details>
+          <summary>Payload details</summary>
+          <div class="payload-grid">
+            <div>
+              <h3>Request</h3>
+              <pre>${escapeHtml(formatJsonLike({
+                headers: request.requestHeaders,
+                body: request.requestBody,
+                fingerprint: request.fingerprint,
+                duplicateOf: request.duplicateOf,
+              }))}</pre>
+            </div>
+            <div>
+              <h3>Response</h3>
+              <pre>${escapeHtml(formatJsonLike(request.responseBody))}</pre>
+            </div>
+          </div>
+        </details>
+      </td>
+    </tr>
+  `).join('')
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API Debugger Session Report</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121015;
+      --surface: #1e1b22;
+      --raised: #292630;
+      --border: #403a49;
+      --border-strong: #5d536b;
+      --text: #eee8f5;
+      --muted: #9c96a6;
+      --subtle: #79737f;
+      --primary: #cbb8ff;
+      --success: #8fe6bc;
+      --warning: #ffd36f;
+      --danger: #ff8f8f;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 22px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 18px;
+    }
+    h1, h2, h3 { margin: 0; }
+    h1 { font-size: 24px; }
+    h2 { margin: 26px 0 12px; font-size: 16px; }
+    h3 { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    .muted { color: var(--muted); }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px;
+    }
+    .label {
+      color: var(--subtle);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .value {
+      margin-top: 4px;
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .chart, .graph {
+      width: 100%;
+      min-height: 160px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px;
+      overflow: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      font-size: 12px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--subtle);
+      font-size: 11px;
+      text-transform: uppercase;
+      background: var(--raised);
+    }
+    .url {
+      display: inline-block;
+      max-width: 420px;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--muted);
+    }
+    .method, .badge {
+      display: inline-flex;
+      margin-right: 4px;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .method { background: rgba(203, 184, 255, 0.16); color: var(--primary); }
+    .badge { border: 1px solid var(--border-strong); }
+    .warn-bg { background: rgba(201, 167, 77, 0.18); color: var(--warning); }
+    .danger-bg { background: rgba(255, 143, 143, 0.14); color: var(--danger); }
+    .success { color: var(--success); }
+    .warning { color: var(--warning); }
+    .danger { color: var(--danger); }
+    details summary { cursor: pointer; color: var(--primary); }
+    .details-row td { background: #18151d; padding: 8px 12px; }
+    .payload-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    pre {
+      max-height: 340px;
+      margin: 0;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #111014;
+      color: var(--muted);
+      padding: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .suggestion {
+      border-left: 3px solid var(--primary);
+      border-radius: 6px;
+      background: var(--surface);
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>API Debugger Session Report</h1>
+        <div class="muted">Generated ${escapeHtml(generatedAt.toLocaleString())}</div>
+      </div>
+      <div class="muted">${total} captured requests</div>
+    </header>
+
+    <section class="stats">
+      <div class="card"><div class="label">Total Requests</div><div class="value">${total}</div></div>
+      <div class="card"><div class="label">Average Latency</div><div class="value">${formatMs(avg)}</div></div>
+      <div class="card"><div class="label">Error Rate</div><div class="value">${errorRate}%</div></div>
+      <div class="card"><div class="label">Duplicate Calls</div><div class="value">${duplicates}</div></div>
+      <div class="card"><div class="label">Slowest Endpoint</div><div class="value" style="font-size: 13px; overflow-wrap: anywhere;">${slowest ? escapeHtml(`${formatMs(slowest.duration)} ${getPath(slowest.url)}`) : '-'}</div></div>
+    </section>
+
+    <h2>Latency Timeline</h2>
+    <div class="chart">${buildLatencySvg(requests)}</div>
+
+    <h2>Dependency Map</h2>
+    <div class="graph">${buildDependencySvg(requests)}</div>
+
+    <h2>Request Feed</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Method</th>
+          <th>URL</th>
+          <th>Status</th>
+          <th>Duration</th>
+          <th>Req Size</th>
+          <th>Resp Size</th>
+          <th>TTFB</th>
+          <th>Flags</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+
+    <h2>AI Suggestions</h2>
+    ${aiSuggestions.length > 0
+      ? aiSuggestions.map(request => `
+        <div class="suggestion">
+          <div class="muted">${escapeHtml(request.method)} ${escapeHtml(getPath(request.url))}</div>
+          <div>${escapeHtml(request.aiSuggestion ?? '')}</div>
+        </div>
+      `).join('')
+      : '<div class="muted">No AI suggestions were captured in this session.</div>'}
+  </main>
+</body>
+</html>`
+}
+
+function buildLatencySvg(requests: RequestEntry[]) {
+  const width = 980
+  const height = 180
+  const padding = 18
+  const max = Math.max(...requests.map(request => request.duration), 100)
+  const points = requests.map((request, index) => {
+    const x = padding + (index / Math.max(1, requests.length - 1)) * (width - padding * 2)
+    const y = height - padding - (request.duration / max) * (height - padding * 2)
+    return { x, y, request }
+  })
+  const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ')
+  const dots = points.map(point => `
+    <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" fill="${point.request.isSlow ? '#ff8f8f' : point.request.status >= 400 ? '#ffd36f' : '#8fe6bc'}">
+      <title>${escapeHtml(`${getPath(point.request.url)} - ${formatMs(point.request.duration)}`)}</title>
+    </circle>
+  `).join('')
+
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Latency timeline">
+    <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#403a49" />
+    <path d="${path}" fill="none" stroke="#cbb8ff" stroke-width="2" opacity="0.8" />
+    ${dots}
+  </svg>`
+}
+
+function buildDependencySvg(requests: RequestEntry[]) {
+  const paths = Array.from(new Set(requests.map(request => getPath(request.url))))
+  const edges = requests.flatMap(request => request.dependsOn.map(source => ({
+    from: getPath(source),
+    to: getPath(request.url),
+    latency: request.duration,
+  }))).filter(edge => paths.includes(edge.from) && paths.includes(edge.to))
+
+  if (paths.length < 2 || edges.length === 0) {
+    return '<div class="muted">No inferred dependencies were captured in this session.</div>'
+  }
+
+  const width = 980
+  const height = 360
+  const centerX = width / 2
+  const centerY = height / 2
+  const radius = 135
+  const positions = new Map(paths.map((path, index) => {
+    const angle = (index / paths.length) * Math.PI * 2
+    return [path, {
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+    }]
+  }))
+  const counts = new Map<string, number>()
+  requests.forEach(request => counts.set(getPath(request.url), (counts.get(getPath(request.url)) ?? 0) + 1))
+  const lines = edges.map(edge => {
+    const start = positions.get(edge.from)
+    const end = positions.get(edge.to)
+    if (!start || !end) return ''
+    return `<line x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke="${edge.latency >= 1500 ? '#ff8f8f' : edge.latency >= 500 ? '#ffd36f' : '#8fe6bc'}" stroke-width="1.5" />`
+  }).join('')
+  const nodes = paths.map(path => {
+    const position = positions.get(path)!
+    const count = counts.get(path) ?? 1
+    const nodeRadius = Math.min(26, 8 + count * 2)
+    return `<g>
+      <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius}" fill="#292630" stroke="#cbb8ff" stroke-width="1.5">
+        <title>${escapeHtml(path)}</title>
+      </circle>
+      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 14).toFixed(1)}" fill="#9c96a6" font-size="10" text-anchor="middle">${escapeHtml(trimMiddle(path, 26))}</text>
+    </g>`
+  }).join('')
+
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Dependency map">${lines}${nodes}</svg>`
+}
+
+function formatJsonLike(value: unknown) {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2)
+    } catch {
+      return value
+    }
+  }
+
+  return JSON.stringify(value, null, 2)
+}
+
+function escapeHtml(value: unknown) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function trimMiddle(value: string, max: number) {
+  if (value.length <= max) return value
+  const keep = Math.max(4, Math.floor((max - 3) / 2))
+  return `${value.slice(0, keep)}...${value.slice(-keep)}`
+}
+
 function getPath(url: string) {
   try {
     return new URL(url).pathname
@@ -624,6 +1039,12 @@ function getPath(url: string) {
 
 function formatMs(ms: number) {
   return ms > 999 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function latencyColor(ms: number) {

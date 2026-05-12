@@ -51,6 +51,8 @@ function createRequestEntry({
     requestBody,
     responseBody,
     isDuplicate,
+    duplicateOf: null,
+    duplicateCount: isDuplicate ? 2 : 1,
     isSlow: duration > settings.slowRequestThresholdMs,
     aiSuggestion: null,
     dependsOn: [],
@@ -268,6 +270,16 @@ function bodyToReplayString(body) {
   }
 }
 
+async function readRequestBody(input) {
+  if (!(input instanceof Request)) return null
+
+  try {
+    return await input.clone().text()
+  } catch {
+    return null
+  }
+}
+
 function createFingerprint(method, url, body) {
   return fnv1aHash([
     method.toUpperCase(),
@@ -405,12 +417,13 @@ window.fetch = async (input, init) => {
   const url = input instanceof Request ? input.url : input.toString()
   const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
   const requestHeaders = mergeHeaders(input instanceof Request ? input.headers : null, init?.headers)
-  const requestBody = bodyToReplayString(init?.body)
+  const requestBodySource = init?.body ?? await readRequestBody(input)
+  const requestBody = bodyToReplayString(requestBodySource)
 
   try {
     const response = await originalFetch(input, init)
     const duration = Math.round(performance.now() - startTime)
-    const requestSize = getBodySize(init?.body)
+    const requestSize = getBodySize(requestBodySource)
 
     captureFetchResponsePayload(response).then(({ responseSize, responseBody }) => {
       const timing = getRequestTiming(url, startTime, ['fetch'])
@@ -426,7 +439,7 @@ window.fetch = async (input, init) => {
         requestBody,
         responseSize,
         responseBody,
-        body: init?.body,
+        body: requestBodySource,
         ttfb: timing.ttfb,
       }))
     })

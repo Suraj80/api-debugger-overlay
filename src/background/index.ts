@@ -7,6 +7,7 @@ const MAX_REQUESTS_PER_TAB = 100
 const MAX_NETWORK_EVENTS_PER_TAB = 200
 const NETWORK_MATCH_WINDOW_MS = 5000
 const sessionsByTab = new Map<number, RequestEntry[]>()
+const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayRequest>()
 const requestReceivedAt = new Map<string, number>()
 const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
@@ -18,12 +19,27 @@ interface NetworkStatusEvent {
   observedAt: number
 }
 
+interface DuplicateGroup {
+  firstRequestId: string
+  count: number
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('API Debugger installed successfully')
 })
 
 function getSession(tabId: number) {
   return sessionsByTab.get(tabId) ?? []
+}
+
+function getDuplicateGroups(tabId: number) {
+  let groups = duplicateGroupsByTab.get(tabId)
+  if (!groups) {
+    groups = new Map()
+    duplicateGroupsByTab.set(tabId, groups)
+  }
+
+  return groups
 }
 
 function normalizeRequestUrl(url: string) {
@@ -53,11 +69,35 @@ function publishSession(tabId: number) {
 function rememberRequest(tabId: number, request: RequestEntry) {
   const receivedAt = Date.now()
   const networkEvent = findRecentNetworkEvent(tabId, request.method, request.url, receivedAt)
-  const requestWithNetworkStatus = networkEvent && networkEvent.status !== request.status
-    ? { ...request, status: networkEvent.status }
-    : request
+  const groups = getDuplicateGroups(tabId)
+  const group = groups.get(request.fingerprint)
+  const duplicateCount = (group?.count ?? 0) + 1
+  const duplicateOf = group?.firstRequestId ?? null
+  const requestWithDuplicateInfo: RequestEntry = {
+    ...request,
+    isDuplicate: duplicateOf != null,
+    duplicateOf,
+    duplicateCount,
+  }
+  groups.set(request.fingerprint, {
+    firstRequestId: group?.firstRequestId ?? request.id,
+    count: duplicateCount,
+  })
+
+  const requestWithNetworkStatus = networkEvent && networkEvent.status !== requestWithDuplicateInfo.status
+    ? { ...requestWithDuplicateInfo, status: networkEvent.status }
+    : requestWithDuplicateInfo
   const previousRequests = getSession(tabId)
-  const requests = [...previousRequests, requestWithNetworkStatus].slice(-MAX_REQUESTS_PER_TAB)
+  const requestsWithUpdatedGroup = previousRequests.map(entry => (
+    entry.fingerprint === requestWithNetworkStatus.fingerprint
+      ? {
+          ...entry,
+          duplicateCount,
+          duplicateOf: entry.id === (group?.firstRequestId ?? entry.id) ? null : group?.firstRequestId ?? null,
+        }
+      : entry
+  ))
+  const requests = [...requestsWithUpdatedGroup, requestWithNetworkStatus].slice(-MAX_REQUESTS_PER_TAB)
 
   previousRequests
     .slice(0, Math.max(0, previousRequests.length + 1 - MAX_REQUESTS_PER_TAB))
@@ -66,6 +106,11 @@ function rememberRequest(tabId: number, request: RequestEntry) {
   requestReceivedAt.set(requestWithNetworkStatus.id, receivedAt)
   sessionsByTab.set(tabId, requests)
   publishSession(tabId)
+
+  return {
+    request: requestWithNetworkStatus,
+    updatedRequests: requestsWithUpdatedGroup.filter(entry => entry.fingerprint === requestWithNetworkStatus.fingerprint),
+  }
 }
 
 function findRecentNetworkEvent(tabId: number, method: string, url: string, now = Date.now()) {
@@ -151,6 +196,7 @@ function publishReplayTarget(tabId: number, request: ReplayRequest) {
 
 chrome.tabs.onRemoved.addListener(tabId => {
   sessionsByTab.delete(tabId)
+  duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
   networkEventsByTab.delete(tabId)
 })
@@ -159,6 +205,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== 'loading') return
 
   sessionsByTab.delete(tabId)
+  duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
   networkEventsByTab.delete(tabId)
   publishSession(tabId)
@@ -225,9 +272,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false
   }
 
+  if (message.type === 'CLEAR_SESSION') {
+    sessionsByTab.delete(sender.tab.id)
+    duplicateGroupsByTab.delete(sender.tab.id)
+    replayTargetsByTab.delete(sender.tab.id)
+    networkEventsByTab.delete(sender.tab.id)
+    publishSession(sender.tab.id)
+    return false
+  }
+
   if (message.type === 'REQUEST_COMPLETE') {
-    rememberRequest(sender.tab.id, message.payload)
-    chrome.tabs.sendMessage(sender.tab.id, message).catch(() => {
+    const { request, updatedRequests } = rememberRequest(sender.tab.id, message.payload)
+    updatedRequests.forEach(updatedRequest => {
+      chrome.tabs.sendMessage(sender.tab!.id!, {
+        type: 'REQUEST_UPDATED',
+        payload: updatedRequest,
+      }).catch(() => {
+        // Tab may have navigated or closed - safe to ignore
+      })
+    })
+    chrome.tabs.sendMessage(sender.tab.id, {
+      type: 'REQUEST_COMPLETE',
+      payload: request,
+    }).catch(() => {
       // Tab may have navigated or closed - safe to ignore
     })
     return false

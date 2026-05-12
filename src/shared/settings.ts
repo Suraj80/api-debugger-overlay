@@ -12,6 +12,7 @@ export interface ApiDebuggerSettings {
 }
 
 export const API_DEBUGGER_SETTINGS_KEY = 'apiDebuggerSettings'
+export const API_DEBUGGER_SECRET_SETTINGS_KEY = 'apiDebuggerSecretSettings'
 
 export const DEFAULT_SETTINGS: ApiDebuggerSettings = {
   captureEnabled: true,
@@ -32,10 +33,32 @@ export function normalizeSettings(value: Partial<ApiDebuggerSettings> | undefine
 }
 
 export async function getSettings(): Promise<ApiDebuggerSettings> {
-  const result = await chrome.storage.local.get(API_DEBUGGER_SETTINGS_KEY)
-  return normalizeSettings(result[API_DEBUGGER_SETTINGS_KEY] as Partial<ApiDebuggerSettings> | undefined)
+  const [syncResult, localResult] = await Promise.all([
+    chrome.storage.sync.get(API_DEBUGGER_SETTINGS_KEY),
+    chrome.storage.local.get([API_DEBUGGER_SETTINGS_KEY, API_DEBUGGER_SECRET_SETTINGS_KEY]),
+  ])
+
+  const syncedSettings = syncResult[API_DEBUGGER_SETTINGS_KEY] as Partial<ApiDebuggerSettings> | undefined
+  const legacyLocalSettings = localResult[API_DEBUGGER_SETTINGS_KEY] as Partial<ApiDebuggerSettings> | undefined
+  const secretSettings = localResult[API_DEBUGGER_SECRET_SETTINGS_KEY] as Pick<ApiDebuggerSettings, 'apiKey'> | undefined
+  const settings = normalizeSettings({
+    ...legacyLocalSettings,
+    ...syncedSettings,
+    apiKey: secretSettings?.apiKey ?? legacyLocalSettings?.apiKey ?? syncedSettings?.apiKey ?? DEFAULT_SETTINGS.apiKey,
+  })
+
+  if (!syncedSettings && legacyLocalSettings) {
+    await saveSettings(settings)
+  }
+
+  return settings
 }
 
 export function saveSettings(settings: ApiDebuggerSettings) {
-  return chrome.storage.local.set({ [API_DEBUGGER_SETTINGS_KEY]: settings })
+  const { apiKey, ...syncSettings } = settings
+
+  return Promise.all([
+    chrome.storage.sync.set({ [API_DEBUGGER_SETTINGS_KEY]: syncSettings }),
+    chrome.storage.local.set({ [API_DEBUGGER_SECRET_SETTINGS_KEY]: { apiKey } }),
+  ])
 }

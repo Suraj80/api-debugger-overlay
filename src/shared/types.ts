@@ -11,6 +11,8 @@ export interface RequestEntry {
   requestBody: string | null
   responseBody: string | null
   isDuplicate: boolean
+  duplicateOf: string | null
+  duplicateCount: number
   isSlow: boolean
   aiSuggestion: string | null
   dependsOn: string[]

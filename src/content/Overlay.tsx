@@ -307,6 +307,10 @@ const overlayThemeCss = `
     border-bottom: 1px solid rgba(64, 58, 73, 0.7);
   }
 
+  .apidbg-row-wrap.has-duplicates {
+    border-left: 3px solid rgba(201, 167, 77, 0.7);
+  }
+
   .apidbg-row {
     gap: 8px;
     height: 40px;
@@ -708,7 +712,7 @@ function Duration({ ms }: { ms: number }) {
   return <span className="apidbg-duration" style={{ '--badge-color': color } as React.CSSProperties}>{display}</span>
 }
 
-function DupBadge() {
+function DupBadge({ count }: { count: number }) {
   return (
     <span
       className="apidbg-badge"
@@ -717,8 +721,9 @@ function DupBadge() {
         '--badge-border': 'rgba(201, 167, 77, 0.45)',
         '--badge-color': 'var(--api-warning)',
       } as React.CSSProperties}
+      title={`${count} matching requests in this session`}
     >
-      DUP
+      DUP x{count}
     </span>
   )
 }
@@ -1020,6 +1025,8 @@ function RequestRow({ req }: { req: RequestEntry }) {
     body: req.requestBody,
     requestSize: req.requestSize,
     fingerprint: req.fingerprint,
+    duplicateOf: req.duplicateOf,
+    duplicateCount: req.duplicateCount,
   }), [req])
 
   const jsonValue = tab === 'response' ? parsedBody ?? { body: null } : requestObj
@@ -1030,13 +1037,13 @@ function RequestRow({ req }: { req: RequestEntry }) {
   }
 
   return (
-    <div className="apidbg-row-wrap">
+    <div className={`apidbg-row-wrap${req.duplicateCount > 1 ? ' has-duplicates' : ''}`}>
       <div className="apidbg-row" onClick={() => setOpen(o => !o)}>
         <MethodBadge method={req.method} />
         <span className="apidbg-path" title={req.url}>{path}</span>
         <StatusBadge status={req.status} />
         <Duration ms={req.duration} />
-        {req.isDuplicate && <DupBadge />}
+        {req.duplicateCount > 1 && <DupBadge count={req.duplicateCount} />}
         {req.isSlow && <SlowBadge />}
         <span className={`apidbg-chevron${open ? ' is-open' : ''}`}>v</span>
       </div>
@@ -1084,6 +1091,12 @@ function RequestRow({ req }: { req: RequestEntry }) {
               <div className="apidbg-meta-label">Response</div>
               <div className="apidbg-meta-value">{formatBytes(req.responseSize)}</div>
             </div>
+            {req.duplicateCount > 1 && (
+              <div className="apidbg-meta-cell">
+                <div className="apidbg-meta-label">Duplicate Group</div>
+                <div className="apidbg-meta-value">{req.duplicateCount} calls</div>
+              </div>
+            )}
           </div>
 
           <div className="apidbg-json-box apidbg-scroll">
@@ -1300,6 +1313,7 @@ export function Overlay({ settings }: OverlayProps) {
                 setSweep(true)
                 window.setTimeout(() => {
                   setRequests([])
+                  sendRuntimeMessage({ type: 'CLEAR_SESSION' })
                   setSweep(false)
                 }, 300)
               }}
