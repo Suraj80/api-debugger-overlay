@@ -4,6 +4,7 @@ export interface ApiDebuggerSettings {
   captureEnabled: boolean
   captureFetch: boolean
   captureXHR: boolean
+  preciseModeEnabled: boolean
   slowRequestThresholdMs: number
   largePayloadThresholdKb: number
   apiKey: string
@@ -18,6 +19,7 @@ export const DEFAULT_SETTINGS: ApiDebuggerSettings = {
   captureEnabled: true,
   captureFetch: true,
   captureXHR: true,
+  preciseModeEnabled: false,
   slowRequestThresholdMs: 1500,
   largePayloadThresholdKb: 500,
   apiKey: '',

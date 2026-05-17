@@ -1,3 +1,5 @@
+export type TimingSource = 'proxy' | 'performance' | 'cdp'
+
 export interface RequestEntry {
   id: string
   url: string
@@ -7,6 +9,8 @@ export interface RequestEntry {
   startTime: number
   requestSize: number
   responseSize: number
+  decodedBodySize: number
+  transferSize: number
   requestHeaders: Record<string, string>
   requestBody: string | null
   responseBody: string | null
@@ -18,6 +22,29 @@ export interface RequestEntry {
   dependsOn: string[]
   fingerprint: string
   ttfb: number
+  dnsTime: number
+  connectTime: number
+  sslTime: number
+  requestTime: number
+  responseTime: number
+  timingSource: TimingSource
+}
+
+export interface TimingUpdatePayload {
+  id: string
+  url: string
+  duration: number
+  startTime: number
+  ttfb: number
+  dnsTime: number
+  connectTime: number
+  sslTime: number
+  requestTime: number
+  responseTime: number
+  responseSize: number
+  decodedBodySize: number
+  transferSize: number
+  timingSource: TimingSource
 }
 
 export interface ReplayRequest {
@@ -39,6 +66,8 @@ export interface ReplayResult {
 export type ExtensionMessage =
   | { type: 'REQUEST_COMPLETE'; payload: RequestEntry }
   | { type: 'REQUEST_UPDATED'; payload: RequestEntry }
+  | { type: 'TIMING_UPDATE'; payload: TimingUpdatePayload }
+  | { type: 'SET_PRECISE_MODE'; payload: { enabled: boolean } }
   | { type: 'REQUEST_FAILED'; payload: { url: string; error: string } }
   | { type: 'CLEAR_SESSION' }
   | { type: 'GET_SESSION'; tabId?: number }

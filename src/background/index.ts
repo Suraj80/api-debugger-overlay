@@ -1,4 +1,12 @@
-import type { ReplayRequest, ReplayResult, ReplayTargetSnapshot, RequestEntry, SessionSnapshot } from '../shared/types'
+import type {
+  ReplayRequest,
+  ReplayResult,
+  ReplayTargetSnapshot,
+  RequestEntry,
+  SessionSnapshot,
+  TimingSource,
+  TimingUpdatePayload,
+} from '../shared/types'
 
 // MV3 service worker - no DOM, no window object
 // Central message hub and in-memory session store for the extension
@@ -6,11 +14,17 @@ import type { ReplayRequest, ReplayResult, ReplayTargetSnapshot, RequestEntry, S
 const MAX_REQUESTS_PER_TAB = 100
 const MAX_NETWORK_EVENTS_PER_TAB = 200
 const NETWORK_MATCH_WINDOW_MS = 5000
+const PENDING_REQUEST_FALLBACK_MS = 1000
+const PENDING_REQUEST_CLEANUP_MS = 5000
+const CDP_MATCH_WINDOW_MS = 5000
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayRequest>()
 const requestReceivedAt = new Map<string, number>()
 const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
+const pendingRequestsByTab = new Map<number, Map<string, PendingRequestState>>()
+const attachedDebuggerTabs = new Set<number>()
+const cdpRequestsByTab = new Map<number, Map<string, CdpRequestState>>()
 
 interface NetworkStatusEvent {
   method: string
@@ -24,12 +38,64 @@ interface DuplicateGroup {
   count: number
 }
 
+interface PendingRequestState {
+  proxy?: RequestEntry
+  timing?: TimingUpdatePayload
+  flushTimeoutId?: number
+  cleanupTimeoutId?: number
+}
+
+interface CdpTimingData {
+  requestTime: number
+  dnsStart: number
+  dnsEnd: number
+  connectStart: number
+  connectEnd: number
+  sslStart: number
+  sslEnd: number
+  sendStart: number
+  sendEnd: number
+  receiveHeadersEnd: number
+}
+
+interface CdpRequestState {
+  requestId: string
+  url: string
+  method: string
+  wallTime: number
+  sentAt: number
+  matchedRequestId?: string
+  status?: number
+  timing?: CdpTimingData
+  encodedDataLength?: number
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('API Debugger installed successfully')
 })
 
 function getSession(tabId: number) {
   return sessionsByTab.get(tabId) ?? []
+}
+
+function getPendingRequests(tabId: number) {
+  let pending = pendingRequestsByTab.get(tabId)
+  if (!pending) {
+    pending = new Map()
+    pendingRequestsByTab.set(tabId, pending)
+  }
+
+  return pending
+}
+
+function getCdpRequests(tabId: number) {
+  let requests = cdpRequestsByTab.get(tabId)
+  if (!requests) {
+    requests = new Map()
+    cdpRequestsByTab.set(tabId, requests)
+  }
+
+  return requests
 }
 
 function getDuplicateGroups(tabId: number) {
@@ -46,6 +112,7 @@ function normalizeRequestUrl(url: string) {
   try {
     const parsedUrl = new URL(url)
     parsedUrl.hash = ''
+    parsedUrl.searchParams.sort()
     return parsedUrl.href
   } catch {
     return url
@@ -64,6 +131,266 @@ function publishSession(tabId: number) {
   }).catch(() => {
     // No extension page is currently listening.
   })
+}
+
+function urlsLooselyMatch(left: string, right: string) {
+  const normalizedLeft = normalizeRequestUrl(left)
+  const normalizedRight = normalizeRequestUrl(right)
+  if (normalizedLeft === normalizedRight) return true
+
+  try {
+    const leftUrl = new URL(normalizedLeft)
+    const rightUrl = new URL(normalizedRight)
+    return leftUrl.pathname === rightUrl.pathname
+  } catch {
+    return normalizedLeft === normalizedRight
+  }
+}
+
+function clearPendingRequest(tabId: number, requestId: string) {
+  const pending = pendingRequestsByTab.get(tabId)
+  const state = pending?.get(requestId)
+
+  if (state?.flushTimeoutId != null) {
+    clearTimeout(state.flushTimeoutId)
+  }
+  if (state?.cleanupTimeoutId != null) {
+    clearTimeout(state.cleanupTimeoutId)
+  }
+
+  pending?.delete(requestId)
+  if (pending?.size === 0) {
+    pendingRequestsByTab.delete(tabId)
+  }
+}
+
+function clearAllPendingRequests(tabId: number) {
+  const pending = pendingRequestsByTab.get(tabId)
+  if (!pending) return
+
+  for (const requestId of pending.keys()) {
+    clearPendingRequest(tabId, requestId)
+  }
+}
+
+function schedulePendingCleanup(tabId: number, requestId: string, state: PendingRequestState) {
+  if (state.cleanupTimeoutId != null) return
+
+  state.cleanupTimeoutId = setTimeout(() => {
+    clearPendingRequest(tabId, requestId)
+  }, PENDING_REQUEST_CLEANUP_MS) as unknown as number
+}
+
+function mergeRequestTiming(proxy: RequestEntry, timing?: TimingUpdatePayload): RequestEntry {
+  if (!timing) return proxy
+
+  const timingSource: TimingSource = timing.timingSource === 'cdp'
+    ? 'cdp'
+    : timing.duration > 0
+      ? 'performance'
+      : proxy.timingSource
+
+  return {
+    ...proxy,
+    duration: timing.duration > 0 ? timing.duration : proxy.duration,
+    startTime: timing.startTime > 0 ? timing.startTime : proxy.startTime,
+    responseSize: timing.responseSize > 0 ? timing.responseSize : proxy.responseSize,
+    decodedBodySize: timing.decodedBodySize > 0 ? timing.decodedBodySize : proxy.decodedBodySize,
+    transferSize: timing.transferSize > 0 ? timing.transferSize : proxy.transferSize,
+    ttfb: timing.ttfb > 0 ? timing.ttfb : proxy.ttfb,
+    dnsTime: timing.dnsTime > 0 ? timing.dnsTime : proxy.dnsTime,
+    connectTime: timing.connectTime > 0 ? timing.connectTime : proxy.connectTime,
+    sslTime: timing.sslTime > 0 ? timing.sslTime : proxy.sslTime,
+    requestTime: timing.requestTime > 0 ? timing.requestTime : proxy.requestTime,
+    responseTime: timing.responseTime > 0 ? timing.responseTime : proxy.responseTime,
+    timingSource,
+  }
+}
+
+function updateStoredRequestTiming(tabId: number, timing: TimingUpdatePayload) {
+  const requests = getSession(tabId)
+  const matchIndex = requests.findIndex(request => request.id === timing.id)
+  if (matchIndex === -1) return false
+
+  const updatedRequest = mergeRequestTiming(requests[matchIndex], timing)
+  const nextRequests = [...requests]
+  nextRequests[matchIndex] = updatedRequest
+  sessionsByTab.set(tabId, nextRequests)
+  publishSession(tabId)
+
+  chrome.tabs.sendMessage(tabId, {
+    type: 'REQUEST_UPDATED',
+    payload: updatedRequest,
+  }).catch(() => {
+    // Tab may have navigated or closed - safe to ignore
+  })
+
+  return true
+}
+
+function flushPendingRequest(tabId: number, requestId: string) {
+  const pending = pendingRequestsByTab.get(tabId)
+  const state = pending?.get(requestId)
+
+  if (!state?.proxy) return
+
+  const mergedRequest = mergeRequestTiming(state.proxy, state.timing)
+  clearPendingRequest(tabId, requestId)
+
+  const { request, updatedRequests } = rememberRequest(tabId, mergedRequest)
+  updatedRequests.forEach(updatedRequest => {
+    chrome.tabs.sendMessage(tabId, {
+      type: 'REQUEST_UPDATED',
+      payload: updatedRequest,
+    }).catch(() => {
+      // Tab may have navigated or closed - safe to ignore
+    })
+  })
+  chrome.tabs.sendMessage(tabId, {
+    type: 'REQUEST_COMPLETE',
+    payload: request,
+  }).catch(() => {
+    // Tab may have navigated or closed - safe to ignore
+  })
+}
+
+function findBestCdpMatch(tabId: number, proxyRequest: RequestEntry) {
+  let bestMatch: CdpRequestState | null = null
+  let bestDelta = Number.POSITIVE_INFINITY
+
+  for (const cdpRequest of getCdpRequests(tabId).values()) {
+    if (cdpRequest.matchedRequestId && cdpRequest.matchedRequestId !== proxyRequest.id) continue
+    if (cdpRequest.method !== proxyRequest.method.toUpperCase()) continue
+    if (!urlsLooselyMatch(cdpRequest.url, proxyRequest.url)) continue
+
+    const delta = Math.abs(cdpRequest.wallTime - proxyRequest.startTime)
+    if (delta > CDP_MATCH_WINDOW_MS) continue
+
+    if (delta < bestDelta) {
+      bestDelta = delta
+      bestMatch = cdpRequest
+    }
+  }
+
+  return bestMatch
+}
+
+function buildCdpTimingPayload(requestId: string, cdpRequest: CdpRequestState): TimingUpdatePayload | null {
+  if (!cdpRequest.timing) return null
+
+  const timing = cdpRequest.timing
+  const duration = cdpRequest.encodedDataLength != null
+    ? Math.max(0, Math.round((cdpRequest.sentAt - timing.requestTime) * 1000))
+    : 0
+
+  return {
+    id: requestId,
+    url: cdpRequest.url,
+    duration: duration > 0 ? duration : Math.max(0, Math.round(timing.receiveHeadersEnd)),
+    startTime: cdpRequest.wallTime,
+    ttfb: timing.receiveHeadersEnd > 0 && timing.sendEnd >= 0
+      ? Math.max(0, Math.round(timing.receiveHeadersEnd - timing.sendEnd))
+      : 0,
+    dnsTime: timing.dnsEnd >= 0 && timing.dnsStart >= 0
+      ? Math.max(0, Math.round(timing.dnsEnd - timing.dnsStart))
+      : 0,
+    connectTime: timing.connectEnd >= 0 && timing.connectStart >= 0
+      ? Math.max(0, Math.round(timing.connectEnd - timing.connectStart))
+      : 0,
+    sslTime: timing.sslEnd >= 0 && timing.sslStart >= 0
+      ? Math.max(0, Math.round(timing.sslEnd - timing.sslStart))
+      : 0,
+    requestTime: timing.receiveHeadersEnd > 0 && timing.sendEnd >= 0
+      ? Math.max(0, Math.round(timing.receiveHeadersEnd - timing.sendEnd))
+      : 0,
+    responseTime: 0,
+    responseSize: cdpRequest.encodedDataLength ?? 0,
+    decodedBodySize: 0,
+    transferSize: cdpRequest.encodedDataLength ?? 0,
+    timingSource: 'cdp',
+  }
+}
+
+function queueRequestCompletion(tabId: number, proxyRequest: RequestEntry) {
+  const matchedCdpRequest = findBestCdpMatch(tabId, proxyRequest)
+  if (matchedCdpRequest) {
+    matchedCdpRequest.matchedRequestId = proxyRequest.id
+    const cdpTimingPayload = buildCdpTimingPayload(proxyRequest.id, matchedCdpRequest)
+    if (cdpTimingPayload) {
+      queueTimingUpdate(tabId, cdpTimingPayload)
+    }
+  }
+
+  const pending = getPendingRequests(tabId)
+  const state = pending.get(proxyRequest.id) ?? {}
+  state.proxy = proxyRequest
+
+  if (state.flushTimeoutId != null) {
+    clearTimeout(state.flushTimeoutId)
+  }
+
+  if (state.timing) {
+    pending.set(proxyRequest.id, state)
+    flushPendingRequest(tabId, proxyRequest.id)
+    return
+  }
+
+  state.flushTimeoutId = setTimeout(() => {
+    flushPendingRequest(tabId, proxyRequest.id)
+  }, PENDING_REQUEST_FALLBACK_MS) as unknown as number
+
+  pending.set(proxyRequest.id, state)
+  schedulePendingCleanup(tabId, proxyRequest.id, state)
+}
+
+function queueTimingUpdate(tabId: number, timing: TimingUpdatePayload) {
+  const pending = getPendingRequests(tabId)
+  const state = pending.get(timing.id) ?? {}
+  state.timing = timing
+  pending.set(timing.id, state)
+  schedulePendingCleanup(tabId, timing.id, state)
+
+  if (state.proxy) {
+    flushPendingRequest(tabId, timing.id)
+    return
+  }
+
+  updateStoredRequestTiming(tabId, timing)
+}
+
+async function attachDebugger(tabId: number) {
+  if (attachedDebuggerTabs.has(tabId)) return
+
+  await chrome.debugger.attach({ tabId }, '1.3')
+  attachedDebuggerTabs.add(tabId)
+  await chrome.debugger.sendCommand({ tabId }, 'Network.enable', {
+    maxTotalBufferSize: 1000000,
+    maxResourceBufferSize: 1000000,
+  })
+}
+
+async function detachDebugger(tabId: number) {
+  if (!attachedDebuggerTabs.has(tabId)) return
+
+  try {
+    await chrome.debugger.detach({ tabId })
+  } catch {
+    // Tab may already be gone or detached.
+  } finally {
+    attachedDebuggerTabs.delete(tabId)
+    cdpRequestsByTab.delete(tabId)
+  }
+}
+
+async function setPreciseMode(enabled: boolean) {
+  const tabId = await getActiveTabId()
+  if (tabId == null) return
+
+  if (enabled) {
+    await attachDebugger(tabId)
+  } else {
+    await detachDebugger(tabId)
+  }
 }
 
 function rememberRequest(tabId: number, request: RequestEntry) {
@@ -90,7 +417,8 @@ function rememberRequest(tabId: number, request: RequestEntry) {
   const requestWithNetworkStatus = networkEvent && networkEvent.status !== requestWithDuplicateInfo.status
     ? { ...requestWithDuplicateInfo, status: networkEvent.status }
     : requestWithDuplicateInfo
-  const requestsWithUpdatedGroup = previousRequests.map(entry => (
+  const requestsWithoutSameId = previousRequests.filter(entry => entry.id !== requestWithNetworkStatus.id)
+  const requestsWithUpdatedGroup = requestsWithoutSameId.map(entry => (
     entry.fingerprint === requestWithNetworkStatus.fingerprint
       ? {
           ...entry,
@@ -101,8 +429,8 @@ function rememberRequest(tabId: number, request: RequestEntry) {
   ))
   const requests = [...requestsWithUpdatedGroup, requestWithNetworkStatus].slice(-MAX_REQUESTS_PER_TAB)
 
-  previousRequests
-    .slice(0, Math.max(0, previousRequests.length + 1 - MAX_REQUESTS_PER_TAB))
+  requestsWithoutSameId
+    .slice(0, Math.max(0, requestsWithoutSameId.length + 1 - MAX_REQUESTS_PER_TAB))
     .forEach(entry => requestReceivedAt.delete(entry.id))
 
   requestReceivedAt.set(requestWithNetworkStatus.id, receivedAt)
@@ -264,11 +592,77 @@ function publishReplayTarget(tabId: number, request: ReplayRequest) {
   })
 }
 
+chrome.debugger.onDetach.addListener(source => {
+  if (source.tabId == null) return
+
+  attachedDebuggerTabs.delete(source.tabId)
+  cdpRequestsByTab.delete(source.tabId)
+})
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (source.tabId == null) return
+  const tabId = source.tabId
+  const cdpRequests = getCdpRequests(tabId)
+
+  if (method === 'Network.requestWillBeSent') {
+    const requestId = String(params.requestId)
+    cdpRequests.set(requestId, {
+      requestId,
+      url: String(params.request.url),
+      method: String(params.request.method).toUpperCase(),
+      wallTime: Math.round(Number(params.wallTime) * 1000),
+      sentAt: Number(params.timestamp),
+    })
+    return
+  }
+
+  if (method === 'Network.responseReceived') {
+    const requestId = String(params.requestId)
+    const current = cdpRequests.get(requestId)
+    if (!current) return
+
+    cdpRequests.set(requestId, {
+      ...current,
+      status: Number(params.response.status),
+      timing: params.response.timing as CdpTimingData | undefined,
+    })
+    return
+  }
+
+  if (method === 'Network.loadingFinished') {
+    const requestId = String(params.requestId)
+    const current = cdpRequests.get(requestId)
+    if (!current) return
+
+    const completed = {
+      ...current,
+      encodedDataLength: Number(params.encodedDataLength ?? 0),
+      sentAt: Number(params.timestamp),
+    }
+    cdpRequests.set(requestId, completed)
+
+    if (completed.matchedRequestId) {
+      const timingPayload = buildCdpTimingPayload(completed.matchedRequestId, completed)
+      if (timingPayload) {
+        queueTimingUpdate(tabId, timingPayload)
+      }
+    }
+    return
+  }
+
+  if (method === 'Network.loadingFailed') {
+    const requestId = String(params.requestId)
+    cdpRequests.delete(requestId)
+  }
+})
+
 chrome.tabs.onRemoved.addListener(tabId => {
   sessionsByTab.delete(tabId)
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
   networkEventsByTab.delete(tabId)
+  clearAllPendingRequests(tabId)
+  void detachDebugger(tabId)
 })
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -278,6 +672,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
   networkEventsByTab.delete(tabId)
+  clearAllPendingRequests(tabId)
+  cdpRequestsByTab.delete(tabId)
   publishSession(tabId)
 })
 
@@ -304,6 +700,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'GET_REPLAY_TARGET') {
     getReplayTargetSnapshot(message.tabId).then(sendResponse)
+    return true
+  }
+
+  if (message.type === 'SET_PRECISE_MODE') {
+    setPreciseMode(message.payload.enabled).then(() => {
+      sendResponse({ ok: true })
+    }).catch(error => {
+      console.warn('[API Debugger] Failed to change precise mode', error)
+      sendResponse({ ok: false })
+    })
     return true
   }
 
@@ -347,26 +753,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     duplicateGroupsByTab.delete(sender.tab.id)
     replayTargetsByTab.delete(sender.tab.id)
     networkEventsByTab.delete(sender.tab.id)
+    clearAllPendingRequests(sender.tab.id)
+    cdpRequestsByTab.delete(sender.tab.id)
     publishSession(sender.tab.id)
     return false
   }
 
   if (message.type === 'REQUEST_COMPLETE') {
-    const { request, updatedRequests } = rememberRequest(sender.tab.id, message.payload)
-    updatedRequests.forEach(updatedRequest => {
-      chrome.tabs.sendMessage(sender.tab!.id!, {
-        type: 'REQUEST_UPDATED',
-        payload: updatedRequest,
-      }).catch(() => {
-        // Tab may have navigated or closed - safe to ignore
-      })
-    })
-    chrome.tabs.sendMessage(sender.tab.id, {
-      type: 'REQUEST_COMPLETE',
-      payload: request,
-    }).catch(() => {
-      // Tab may have navigated or closed - safe to ignore
-    })
+    queueRequestCompletion(sender.tab.id, message.payload)
+    return false
+  }
+
+  if (message.type === 'TIMING_UPDATE') {
+    queueTimingUpdate(sender.tab.id, message.payload)
     return false
   }
 

@@ -16,6 +16,7 @@ export function Popup() {
   const [capturing, setCapturing] = useState(true)
   const [captureFetch, setCaptureFetch] = useState(true)
   const [captureXHR, setCaptureXHR] = useState(true)
+  const [preciseMode, setPreciseMode] = useState(false)
   const [slowMs, setSlowMs] = useState(1500)
   const [largeKb, setLargeKb] = useState(500)
   const [apiKey, setApiKey] = useState('')
@@ -31,6 +32,7 @@ export function Popup() {
       setCapturing(settings.captureEnabled)
       setCaptureFetch(settings.captureFetch)
       setCaptureXHR(settings.captureXHR)
+      setPreciseMode(settings.preciseModeEnabled)
       setSlowMs(settings.slowRequestThresholdMs)
       setLargeKb(settings.largePayloadThresholdKb)
       setApiKey(settings.apiKey)
@@ -47,13 +49,25 @@ export function Popup() {
       captureEnabled: capturing,
       captureFetch,
       captureXHR,
+      preciseModeEnabled: preciseMode,
       slowRequestThresholdMs: slowMs,
       largePayloadThresholdKb: largeKb,
       apiKey: debouncedApiKey,
       overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
       showOverlayOnLoad: showOnLoad,
     })
-  }, [captureFetch, captureXHR, capturing, debouncedApiKey, largeKb, loaded, position, showOnLoad, slowMs])
+  }, [captureFetch, captureXHR, capturing, debouncedApiKey, largeKb, loaded, position, preciseMode, showOnLoad, slowMs])
+
+  useEffect(() => {
+    if (!loaded) return
+
+    chrome.runtime.sendMessage({
+      type: 'SET_PRECISE_MODE',
+      payload: { enabled: preciseMode },
+    }).catch(() => {
+      // Ignore transient popup/runtime disconnects during dev reloads.
+    })
+  }, [loaded, preciseMode])
 
   const testConnection = async () => {
     if (!apiKey.trim()) {
@@ -87,6 +101,7 @@ export function Popup() {
     setCapturing(DEFAULT_SETTINGS.captureEnabled)
     setCaptureFetch(DEFAULT_SETTINGS.captureFetch)
     setCaptureXHR(DEFAULT_SETTINGS.captureXHR)
+    setPreciseMode(DEFAULT_SETTINGS.preciseModeEnabled)
     setSlowMs(DEFAULT_SETTINGS.slowRequestThresholdMs)
     setLargeKb(DEFAULT_SETTINGS.largePayloadThresholdKb)
     setApiKey(DEFAULT_SETTINGS.apiKey)
@@ -119,6 +134,7 @@ export function Popup() {
           <ToggleRow label="Enable capture on this tab" value={capturing} onChange={setCapturing} />
           <ToggleRow label="Capture fetch requests" value={captureFetch} onChange={setCaptureFetch} />
           <ToggleRow label="Capture XHR requests" value={captureXHR} onChange={setCaptureXHR} />
+          <ToggleRow label="Precise mode" value={preciseMode} onChange={setPreciseMode} hint="Uses Chrome debugger for DevTools-level timing. Chrome will show a debugging banner on the page." />
         </Section>
 
         <Section title="Thresholds">
@@ -215,10 +231,23 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function ToggleRow({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
+function ToggleRow({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string
+  value: boolean
+  onChange: (value: boolean) => void
+  hint?: string
+}) {
   return (
     <div className="api-popup-row">
-      <span className="api-popup-label">{label}</span>
+      <div>
+        <span className="api-popup-label">{label}</span>
+        {hint && <div className="api-popup-help" style={{ marginTop: 4 }}>{hint}</div>}
+      </div>
       <button
         className={`api-toggle${value ? ' is-on' : ''}`}
         onClick={() => onChange(!value)}

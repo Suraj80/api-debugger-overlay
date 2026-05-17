@@ -587,6 +587,22 @@ const overlayThemeCss = `
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
+  .apidbg-timing-chip {
+    display: inline-flex;
+    min-width: 22px;
+    height: 16px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--chip-border, var(--api-border));
+    border-radius: 999px;
+    background: var(--chip-bg, var(--api-surface));
+    color: var(--chip-color, var(--api-text-subtle));
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 1;
+    padding: 0 5px;
+  }
+
   .apidbg-badge {
     border: 1px solid var(--badge-border, var(--api-border));
     border-radius: 3px;
@@ -708,6 +724,64 @@ function Duration({ ms }: { ms: number }) {
   const display = ms > 999 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 
   return <span className="apidbg-duration" style={{ '--badge-color': color } as React.CSSProperties}>{display}</span>
+}
+
+function TimingSourceBadge({ source }: { source: RequestEntry['timingSource'] }) {
+  const label = source === 'cdp' ? 'CDP' : source === 'performance' ? 'Browser' : 'Proxy'
+  const style = source === 'cdp'
+    ? {
+        '--badge-bg': 'rgba(98, 214, 157, 0.14)',
+        '--badge-border': 'rgba(98, 214, 157, 0.4)',
+        '--badge-color': '#8fe6bc',
+      }
+    : source === 'performance'
+    ? {
+        '--badge-bg': 'rgba(77, 163, 255, 0.14)',
+        '--badge-border': 'rgba(77, 163, 255, 0.4)',
+        '--badge-color': '#89c2ff',
+      }
+    : {
+        '--badge-bg': 'rgba(201, 167, 77, 0.16)',
+        '--badge-border': 'rgba(201, 167, 77, 0.38)',
+        '--badge-color': 'var(--api-warning)',
+      }
+
+  return (
+    <span className="apidbg-badge" style={style as React.CSSProperties}>
+      {label}
+    </span>
+  )
+}
+
+function TimingSourceChip({ source }: { source: RequestEntry['timingSource'] }) {
+  const label = source === 'cdp' ? 'CDP' : source === 'performance' ? 'BR' : 'JS'
+  const style = source === 'cdp'
+    ? {
+        '--chip-bg': 'rgba(98, 214, 157, 0.14)',
+        '--chip-border': 'rgba(98, 214, 157, 0.4)',
+        '--chip-color': '#8fe6bc',
+      }
+    : source === 'performance'
+    ? {
+        '--chip-bg': 'rgba(77, 163, 255, 0.14)',
+        '--chip-border': 'rgba(77, 163, 255, 0.4)',
+        '--chip-color': '#89c2ff',
+      }
+    : {
+        '--chip-bg': 'rgba(201, 167, 77, 0.16)',
+        '--chip-border': 'rgba(201, 167, 77, 0.38)',
+        '--chip-color': 'var(--api-warning)',
+      }
+
+  return (
+    <span
+      className="apidbg-timing-chip"
+      style={style as React.CSSProperties}
+      title={source === 'cdp' ? 'Chrome DevTools Protocol timing' : source === 'performance' ? 'Browser timing' : 'JavaScript proxy timing'}
+    >
+      {label}
+    </span>
+  )
 }
 
 function DupBadge({ count }: { count: number }) {
@@ -1114,6 +1188,7 @@ function RequestRow({ req }: { req: RequestEntry }) {
         <MethodBadge method={req.method} />
         <span className="apidbg-path" title={req.url}>{path}</span>
         <StatusBadge status={req.status} />
+        <TimingSourceChip source={req.timingSource} />
         <Duration ms={req.duration} />
         {req.duplicateCount > 1 && <DupBadge count={req.duplicateCount} />}
         {req.isSlow && <SlowBadge />}
@@ -1178,6 +1253,10 @@ function RequestRow({ req }: { req: RequestEntry }) {
               <div className="apidbg-meta-label">Response</div>
               <div className="apidbg-meta-value">{formatBytes(req.responseSize)}</div>
             </div>
+            <div className="apidbg-meta-cell">
+              <div className="apidbg-meta-label">Timing</div>
+              <div className="apidbg-meta-value">{req.timingSource === 'cdp' ? 'CDP' : req.timingSource === 'performance' ? 'Browser' : 'Proxy'}</div>
+            </div>
             {req.duplicateCount > 1 && (
               <div className="apidbg-meta-cell">
                 <div className="apidbg-meta-label">Duplicate Group</div>
@@ -1208,6 +1287,7 @@ function RequestRow({ req }: { req: RequestEntry }) {
           </div>
 
           <div className="apidbg-detail-actions">
+            <TimingSourceBadge source={req.timingSource} />
             {(req.isSlow || req.status >= 400) && (
               <button className="apidbg-primary-button" onClick={triggerAI}>Ask AI</button>
             )}
@@ -1268,12 +1348,23 @@ export function Overlay() {
   const [sweep, setSweep] = useState(false)
 
   useEffect(() => {
+    const upsertRequest = (currentRequests: RequestEntry[], nextRequest: RequestEntry) => {
+      const existingIndex = currentRequests.findIndex(request => request.id === nextRequest.id)
+      if (existingIndex === -1) {
+        return [nextRequest, ...currentRequests].slice(0, 100)
+      }
+
+      const nextRequests = [...currentRequests]
+      nextRequests[existingIndex] = nextRequest
+      return nextRequests
+    }
+
     const handler = (msg: unknown) => {
       if (isRequestCompleteMessage(msg)) {
-        setRequests(prev => [msg.payload, ...prev].slice(0, 100))
+        setRequests(prev => upsertRequest(prev, msg.payload))
       }
       if (isRequestUpdatedMessage(msg)) {
-        setRequests(prev => prev.map(request => request.id === msg.payload.id ? msg.payload : request))
+        setRequests(prev => upsertRequest(prev, msg.payload))
       }
     }
     try {

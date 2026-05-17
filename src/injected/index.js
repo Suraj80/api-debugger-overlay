@@ -19,6 +19,8 @@ const MAX_FINGERPRINTS = 1000
 const seenFingerprints = new Set()
 const performanceEntries = []
 const MAX_PERFORMANCE_ENTRIES = 300
+const pendingObservedRequests = []
+const MATCH_WINDOW_MS = 5000
 
 function addFingerprint(fp) {
   if (seenFingerprints.size >= MAX_FINGERPRINTS) {
@@ -34,6 +36,7 @@ function hasFingerprint(fp) {
 }
 
 function createRequestEntry({
+  id,
   url,
   method,
   status,
@@ -53,7 +56,7 @@ function createRequestEntry({
   addFingerprint(fingerprint)
 
   return {
-    id: crypto.randomUUID(),
+    id,
     url,
     method,
     status,
@@ -61,6 +64,8 @@ function createRequestEntry({
     startTime,
     requestSize,
     responseSize,
+    decodedBodySize: responseSize,
+    transferSize: responseSize,
     requestHeaders,
     requestBody,
     responseBody,
@@ -72,11 +77,22 @@ function createRequestEntry({
     dependsOn: [],
     fingerprint,
     ttfb,
+    dnsTime: 0,
+    connectTime: 0,
+    sslTime: 0,
+    requestTime: 0,
+    responseTime: 0,
+    timingSource: 'proxy',
   }
+}
+
+function toAbsoluteTime(relativeTime) {
+  return Math.round(performance.timeOrigin + relativeTime)
 }
 
 function rememberPerformanceEntries(entries) {
   performanceEntries.push(...entries)
+  processPerformanceEntries(entries)
 
   if (performanceEntries.length > MAX_PERFORMANCE_ENTRIES) {
     performanceEntries.splice(0, performanceEntries.length - MAX_PERFORMANCE_ENTRIES)
@@ -85,8 +101,6 @@ function rememberPerformanceEntries(entries) {
 
 function startPerformanceObserver() {
   try {
-    rememberPerformanceEntries(performance.getEntriesByType('resource'))
-
     const observer = new PerformanceObserver(list => {
       rememberPerformanceEntries(list.getEntries())
     })
@@ -194,6 +208,14 @@ function postRequestComplete(entry) {
     source: 'api-debugger-injected',
     type: 'REQUEST_COMPLETE',
     payload: entry
+  }, '*')
+}
+
+function postTimingUpdate(payload) {
+  window.postMessage({
+    source: 'api-debugger-injected',
+    type: 'TIMING_UPDATE',
+    payload,
   }, '*')
 }
 
@@ -328,32 +350,107 @@ function absoluteUrl(url) {
   }
 }
 
-function getRequestTiming(url, startTime, initiatorTypes) {
-  const href = absoluteUrl(url)
-  const allowedInitiators = new Set(initiatorTypes)
-  let bestEntry = null
+function decodeUrl(url) {
+  try {
+    return decodeURIComponent(url)
+  } catch {
+    return url
+  }
+}
+
+function getPathname(url) {
+  try {
+    return new URL(url, window.location.href).pathname
+  } catch {
+    return String(url)
+  }
+}
+
+function urlsRoughlyMatch(left, right) {
+  const absoluteLeft = absoluteUrl(left)
+  const absoluteRight = absoluteUrl(right)
+
+  return (
+    absoluteLeft === absoluteRight ||
+    decodeUrl(absoluteLeft) === decodeUrl(absoluteRight) ||
+    getPathname(absoluteLeft) === getPathname(absoluteRight)
+  )
+}
+
+function registerObservedRequest(meta) {
+  pendingObservedRequests.push(meta)
+
+  if (pendingObservedRequests.length > 500) {
+    pendingObservedRequests.splice(0, pendingObservedRequests.length - 500)
+  }
+}
+
+function emitTimingUpdate(requestId, entry) {
+  const requestStart = entry.requestStart > 0 ? entry.requestStart : entry.startTime
+  const responseStart = entry.responseStart > 0 ? entry.responseStart : 0
+  const responseEnd = entry.responseEnd > 0 ? entry.responseEnd : responseStart
+
+  postTimingUpdate({
+    id: requestId,
+    url: entry.name,
+    duration: Math.round(entry.duration),
+    startTime: toAbsoluteTime(entry.startTime),
+    ttfb: responseStart > 0 && requestStart > 0 ? Math.max(0, Math.round(responseStart - requestStart)) : 0,
+    dnsTime: entry.domainLookupEnd > 0 && entry.domainLookupStart >= 0
+      ? Math.max(0, Math.round(entry.domainLookupEnd - entry.domainLookupStart))
+      : 0,
+    connectTime: entry.connectEnd > 0 && entry.connectStart >= 0
+      ? Math.max(0, Math.round(entry.connectEnd - entry.connectStart))
+      : 0,
+    sslTime: entry.secureConnectionStart > 0 && entry.connectEnd > 0
+      ? Math.max(0, Math.round(entry.connectEnd - entry.secureConnectionStart))
+      : 0,
+    requestTime: responseStart > 0 && requestStart > 0 ? Math.max(0, Math.round(responseStart - requestStart)) : 0,
+    responseTime: responseEnd > 0 && responseStart > 0 ? Math.max(0, Math.round(responseEnd - responseStart)) : 0,
+    responseSize: entry.encodedBodySize || 0,
+    decodedBodySize: entry.decodedBodySize || 0,
+    transferSize: entry.transferSize || 0,
+    timingSource: 'performance',
+  })
+}
+
+function matchPerformanceEntry(entry) {
+  const absoluteEntryUrl = absoluteUrl(entry.name)
+  let bestIndex = -1
   let bestDelta = Number.POSITIVE_INFINITY
 
-  for (let index = performanceEntries.length - 1; index >= 0; index -= 1) {
-    const entry = performanceEntries[index]
-    if (entry.name !== href) continue
-    if (allowedInitiators.size > 0 && !allowedInitiators.has(entry.initiatorType)) continue
+  for (let index = pendingObservedRequests.length - 1; index >= 0; index -= 1) {
+    const pending = pendingObservedRequests[index]
+    if (pending.matched) continue
+    if (!urlsRoughlyMatch(pending.url, absoluteEntryUrl)) continue
 
-    const delta = Math.abs(entry.startTime - startTime)
+    const delta = Math.abs(entry.startTime - pending.startTime)
     if (delta < bestDelta) {
-      bestEntry = entry
       bestDelta = delta
+      bestIndex = index
     }
   }
 
-  if (!bestEntry || bestDelta > 250) {
-    return { ttfb: 0 }
-  }
+  if (bestIndex === -1 || bestDelta > MATCH_WINDOW_MS) return
 
-  return {
-    ttfb: bestEntry.responseStart > 0
-      ? Math.max(0, Math.round(bestEntry.responseStart - bestEntry.startTime))
-      : 0,
+  const matchedRequestId = pendingObservedRequests[bestIndex].id
+  pendingObservedRequests[bestIndex].matched = true
+  emitTimingUpdate(matchedRequestId, entry)
+
+  window.setTimeout(() => {
+    const staleIndex = pendingObservedRequests.findIndex(pending => pending.id === matchedRequestId)
+    if (staleIndex >= 0) {
+      pendingObservedRequests.splice(staleIndex, 1)
+    }
+  }, 0)
+}
+
+function processPerformanceEntries(entries) {
+  for (const entry of entries) {
+    if (entry.entryType !== 'resource') continue
+    if (entry.initiatorType !== 'fetch' && entry.initiatorType !== 'xmlhttprequest') continue
+
+    matchPerformanceEntry(entry)
   }
 }
 
@@ -433,6 +530,14 @@ window.fetch = async (input, init) => {
   const requestHeaders = mergeHeaders(input instanceof Request ? input.headers : null, init?.headers)
   const requestBodySource = init?.body ?? await readRequestBody(input)
   const requestBody = bodyToReplayString(requestBodySource)
+  const requestId = crypto.randomUUID()
+
+  registerObservedRequest({
+    id: requestId,
+    url: absoluteUrl(url),
+    startTime,
+    matched: false,
+  })
 
   try {
     const response = await originalFetch(input, init)
@@ -440,26 +545,28 @@ window.fetch = async (input, init) => {
     const requestSize = getBodySize(requestBodySource)
 
     captureFetchResponsePayload(response).then(({ responseSize, responseBody }) => {
-      const timing = getRequestTiming(url, startTime, ['fetch'])
-
       postRequestComplete(createRequestEntry({
+        id: requestId,
         url,
         method,
         status: response.status,
         duration,
-        startTime,
+        startTime: toAbsoluteTime(startTime),
         requestSize,
         requestHeaders,
         requestBody,
         responseSize,
         responseBody,
         body: requestBodySource,
-        ttfb: timing.ttfb,
       }))
     })
 
     return response
   } catch (error) {
+    const pendingIndex = pendingObservedRequests.findIndex(pending => pending.id === requestId)
+    if (pendingIndex >= 0) {
+      pendingObservedRequests.splice(pendingIndex, 1)
+    }
     postRequestFailed({ url, method, error: String(error) })
     throw error
   }
@@ -468,6 +575,7 @@ window.fetch = async (input, init) => {
 XMLHttpRequest.prototype.open = function (method, url, async, user, password) {
   if (settings.captureEnabled && settings.captureXHR) {
     xhrMeta.set(this, {
+      id: crypto.randomUUID(),
       method: String(method || 'GET').toUpperCase(),
       url: String(url),
       requestHeaders: {},
@@ -503,31 +611,40 @@ XMLHttpRequest.prototype.send = function (body) {
   meta.startTime = performance.now()
   meta.requestSize = getBodySize(body)
   meta.requestBody = bodyToReplayString(body)
+  registerObservedRequest({
+    id: meta.id,
+    url: absoluteUrl(meta.url),
+    startTime: meta.startTime,
+    matched: false,
+  })
 
   const handleLoadEnd = () => {
     const duration = Math.round(performance.now() - meta.startTime)
     const { responseSize, responseBody } = captureXhrResponsePayload(this)
-    const timing = getRequestTiming(meta.url, meta.startTime, ['xmlhttprequest'])
 
     postRequestComplete(createRequestEntry({
+      id: meta.id,
       url: meta.url,
       method: meta.method,
       status: this.status,
       duration,
-      startTime: meta.startTime,
+      startTime: toAbsoluteTime(meta.startTime),
       requestSize: meta.requestSize,
       requestHeaders: meta.requestHeaders,
       requestBody: meta.requestBody,
       responseSize,
       responseBody,
       body,
-      ttfb: timing.ttfb,
     }))
 
     xhrMeta.delete(this)
   }
 
   const handleError = () => {
+    const pendingIndex = pendingObservedRequests.findIndex(pending => pending.id === meta.id)
+    if (pendingIndex >= 0) {
+      pendingObservedRequests.splice(pendingIndex, 1)
+    }
     postRequestFailed({
       url: meta.url,
       method: meta.method,
@@ -542,6 +659,15 @@ XMLHttpRequest.prototype.send = function (body) {
 
   return originalXhrSend.apply(this, arguments)
 }
+
+window.setInterval(() => {
+  const cutoff = performance.now() - 30000
+  for (let index = pendingObservedRequests.length - 1; index >= 0; index -= 1) {
+    if (pendingObservedRequests[index].startTime < cutoff) {
+      pendingObservedRequests.splice(index, 1)
+    }
+  }
+}, 10000)
 
 async function replayRequest(requestId, request) {
   const startTime = performance.now()
