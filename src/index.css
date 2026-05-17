@@ -599,6 +599,62 @@
   padding: 16px;
 }
 
+.api-replay-summary,
+.api-replay-result {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: rgba(41, 38, 48, 0.55);
+  padding: 10px 12px;
+}
+
+.api-replay-summary-row,
+.api-replay-section-head,
+.api-replay-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.api-replay-summary-row,
+.api-replay-tools {
+  flex-wrap: wrap;
+}
+
+.api-replay-section-head {
+  justify-content: space-between;
+}
+
+.api-replay-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--api-border-strong);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--api-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.api-replay-badge.is-dirty {
+  border-color: var(--api-warning);
+  color: var(--api-warning);
+}
+
+.api-replay-badge.is-success {
+  border-color: var(--api-success);
+  color: var(--api-success);
+}
+
+.api-replay-badge.is-error {
+  border-color: var(--api-danger);
+  color: var(--api-danger);
+}
+
 .api-replay-row {
   align-items: stretch;
 }
@@ -638,6 +694,12 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   line-height: 1.5;
   resize: vertical;
+}
+
+.api-replay-error {
+  margin-top: 6px;
+  color: var(--api-danger);
+  font-size: 12px;
 }
 
 .api-primary-wide:disabled {

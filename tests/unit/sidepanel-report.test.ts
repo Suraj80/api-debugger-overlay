@@ -64,6 +64,32 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('Batch the user lookup and trim payload size.')
     expect(html).toContain('&lt;server-down&gt;')
     expect(html).toContain('Dependency Map')
+    expect(html).toContain('Capture Fidelity')
+    expect(html).toContain('Failed / Aborted')
+  })
+
+  it('renders explicit placeholders for unavailable payloads in the exported report', async () => {
+    const { buildSessionReportHtml } = await import('../../src/sidepanel/index')
+
+    const html = buildSessionReportHtml([
+      createRequest({
+        id: 'failed',
+        status: 0,
+        requestSize: 128,
+        requestBody: null,
+        responseSize: 0,
+        responseBody: '[Request aborted: abort]',
+      }),
+      createRequest({
+        id: 'binary',
+        responseSize: 2048,
+        responseBody: '[Binary response omitted: application/octet-stream, 2.0 KB]',
+      }),
+    ], 500)
+
+    expect(html).toContain('[request body unavailable in capture, 128 B transferred]')
+    expect(html).toContain('[Request aborted: abort]')
+    expect(html).toContain('[Binary response omitted: application/octet-stream, 2.0 KB]')
   })
 
   it('renders dependency SVG edges for inferred request chains', async () => {

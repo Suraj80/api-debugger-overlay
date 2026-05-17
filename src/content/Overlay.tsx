@@ -98,6 +98,8 @@ const overlayThemeCss = `
   .apidbg-minimised {
     box-sizing: border-box;
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    line-height: 1.4;
   }
 
   .apidbg-overlay *,

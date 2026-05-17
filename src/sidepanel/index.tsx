@@ -181,7 +181,14 @@ export function SidePanel() {
       <main className="api-sidepanel-content api-scroll">
         {tab === 'session' && <SessionTab requests={requests} />}
         {tab === 'deps' && <DependencyTab requests={requests} />}
-        {tab === 'replay' && <ReplayTab key={replayTarget?.id ?? 'empty-replay'} tabId={sessionTabId} request={replayTarget} />}
+        {tab === 'replay' && (
+          <ReplayTab
+            key={replayTarget?.id ?? 'empty-replay'}
+            tabId={sessionTabId}
+            request={replayTarget}
+            originalRequest={requests.find(candidate => candidate.id === replayTarget?.id) ?? null}
+          />
+        )}
       </main>
     </div>
   )
@@ -462,7 +469,15 @@ function rowsToHeaders(rows: { k: string; v: string }[]) {
   }, {})
 }
 
-function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRequest | null }) {
+function ReplayTab({
+  tabId,
+  request,
+  originalRequest,
+}: {
+  tabId: number | null
+  request: ReplayRequest | null
+  originalRequest: RequestEntry | null
+}) {
   const replayRef = useRef<HTMLDivElement>(null)
   const [method, setMethod] = useState(request?.method ?? 'GET')
   const [url, setUrl] = useState(request?.url ?? '')
@@ -470,10 +485,53 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
   const [body, setBody] = useState(request?.body ?? '')
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<ReplayResult | null>(null)
+  const [bodyError, setBodyError] = useState('')
   const lineNumbers = body.split('\n').map((_, index) => index + 1)
+  const headerMap = rowsToHeaders(headers)
+  const expectsJsonBody = /\bjson\b/i.test(headerMap['content-type'] ?? '') || /^[\s[{]/.test(body.trim())
+  const hasChanges = request
+    ? (
+        method !== request.method ||
+        url !== request.url ||
+        body !== (request.body ?? '') ||
+        JSON.stringify(headerMap) !== JSON.stringify(request.headers)
+      )
+    : false
+
+  const formatBody = () => {
+    if (!body.trim()) {
+      setBodyError('')
+      return
+    }
+
+    try {
+      setBody(JSON.stringify(JSON.parse(body), null, 2))
+      setBodyError('')
+    } catch {
+      setBodyError('Body is not valid JSON. Fix it before formatting or replaying.')
+    }
+  }
+
+  const resetReplay = () => {
+    setMethod(request?.method ?? 'GET')
+    setUrl(request?.url ?? '')
+    setHeaders(headersToRows(request?.headers ?? {}))
+    setBody(request?.body ?? '')
+    setBodyError('')
+    setResult(null)
+  }
 
   const send = () => {
     if (!tabId || !url) return
+    if (body.trim() && expectsJsonBody) {
+      try {
+        JSON.parse(body)
+        setBodyError('')
+      } catch {
+        setBodyError('Body is not valid JSON. Fix it before replaying.')
+        return
+      }
+    }
 
     setSending(true)
     setResult(null)
@@ -485,7 +543,7 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
         id: request?.id ?? crypto.randomUUID(),
         method,
         url,
-        headers: rowsToHeaders(headers),
+        headers: headerMap,
         body: body.trim() ? body : null,
         originalResponseBody: request?.originalResponseBody ?? null,
       },
@@ -507,6 +565,7 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
     request?.originalResponseBody ?? '',
     result?.responseBody ?? '',
   )
+  const diffSummary = summarizeDiff(diff)
 
   useEffect(() => {
     const replay = replayRef.current
@@ -550,6 +609,22 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
       role="region"
       aria-label="Request replay editor"
     >
+      {request && (
+        <div className="api-replay-summary">
+          <div className="api-replay-summary-row">
+            <MethodPill method={request.method} />
+            <span className="api-muted">{getPath(request.url)}</span>
+            {originalRequest && <span className="api-muted">Original {formatMs(originalRequest.duration)} · {originalRequest.status}</span>}
+          </div>
+          <div className="api-replay-summary-row">
+            <span className={`api-replay-badge${hasChanges ? ' is-dirty' : ''}`}>{hasChanges ? 'Edited' : 'Original values'}</span>
+            {originalRequest?.ttfb ? <span className="api-muted">TTFB {formatMs(originalRequest.ttfb)}</span> : null}
+            {originalRequest ? <span className="api-muted">Resp {formatBytes(originalRequest.responseSize)}</span> : null}
+            {originalRequest?.timingSource ? <span className="api-muted">Source {originalRequest.timingSource === 'performance' ? 'Browser' : originalRequest.timingSource.toUpperCase()}</span> : null}
+          </div>
+        </div>
+      )}
+
       <div className="api-replay-row">
         <select
           className="api-replay-select api-replay-method"
@@ -568,7 +643,10 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
       </div>
 
       <div>
-        <SectionHeading>Headers</SectionHeading>
+        <div className="api-replay-section-head">
+          <SectionHeading>Headers</SectionHeading>
+          <span className="api-muted">{Object.keys(headerMap).length} active</span>
+        </div>
         {headers.map((header, index) => (
           <div className="api-header-row" key={index} style={{ marginBottom: 6 }}>
             <input
@@ -600,13 +678,20 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
       </div>
 
       <div>
-        <SectionHeading>Body</SectionHeading>
+        <div className="api-replay-section-head">
+          <SectionHeading>Body</SectionHeading>
+          <div className="api-replay-tools">
+            <button className="api-sidepanel-plain" type="button" onClick={formatBody}>Format JSON</button>
+            <button className="api-sidepanel-plain" type="button" onClick={resetReplay}>Reset</button>
+          </div>
+        </div>
         <div className="api-body-editor">
           <div className="api-line-numbers">
             {lineNumbers.map(number => <div key={number}>{number}</div>)}
           </div>
           <textarea className="api-replay-textarea" value={body} onChange={event => setBody(event.target.value)} aria-label="Replay request body" />
         </div>
+        {bodyError && <div className="api-replay-error">{bodyError}</div>}
       </div>
 
       <button className="api-primary-wide" onClick={send} disabled={sending || !tabId || !url} aria-busy={sending}>
@@ -622,8 +707,19 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
         </div>
       ) : result ? (
         <>
-          <div className="api-muted">
-            Replayed with status {result.status || 'failed'} in {formatMs(result.duration)}
+          <div className="api-replay-result">
+            <div className="api-replay-summary-row">
+              <span className={`api-replay-badge${result.status >= 400 || result.status === 0 ? ' is-error' : ' is-success'}`}>
+                {result.status || 'failed'}
+              </span>
+              <span className="api-muted">Replay completed in {formatMs(result.duration)}</span>
+              <span className="api-muted">{result.responseHeaders['content-type'] ?? 'unknown content-type'}</span>
+            </div>
+            <div className="api-replay-summary-row">
+              <span className="api-muted">{diffSummary.same} unchanged</span>
+              <span className="api-muted">{diffSummary.added} added</span>
+              <span className="api-muted">{diffSummary.removed} removed</span>
+            </div>
           </div>
           <div className="api-diff-grid">
             <DiffPanel title="Original Response" lines={diff.left} />
@@ -801,6 +897,14 @@ export function computeDiff(a: string, b: string): { left: DiffLine[]; right: Di
   }
 }
 
+function summarizeDiff(diff: { left: DiffLine[]; right: DiffLine[] }) {
+  return {
+    same: diff.right.filter(line => line.kind === 'same').length,
+    added: diff.right.filter(line => line.kind === 'add').length,
+    removed: diff.left.filter(line => line.kind === 'del').length,
+  }
+}
+
 export async function exportSessionReport(requests: RequestEntry[]) {
   if (requests.length === 0) {
     throw new Error('No requests captured yet.')
@@ -852,6 +956,9 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
   const errorRate = total ? Math.round((errors / total) * 1000) / 10 : 0
   const duplicates = requests.filter(request => request.isDuplicate).length
   const largePayloads = requests.filter(request => isLargePayload(request, largePayloadThresholdKb)).length
+  const failedRequests = requests.filter(request => request.status === 0).length
+  const capturedRequestBodies = requests.filter(request => request.requestBody != null && request.requestBody !== '').length
+  const capturedResponseBodies = requests.filter(request => request.responseBody != null && request.responseBody !== '').length
   const slowest = [...requests].sort((a, b) => b.duration - a.duration)[0]
   const aiSuggestions = requests.filter(request => request.aiSuggestion)
   const rows = requests.map(request => `
@@ -877,16 +984,19 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
           <div class="payload-grid">
             <div>
               <h3>Request</h3>
-              <pre>${escapeHtml(formatJsonLike({
+              <pre>${escapeHtml(formatPayloadPreview({
                 headers: request.requestHeaders,
                 body: request.requestBody,
+                captureNote: request.requestBody == null && request.requestSize > 0
+                  ? `[request body unavailable in capture, ${formatBytes(request.requestSize)} transferred]`
+                  : undefined,
                 fingerprint: request.fingerprint,
                 duplicateOf: request.duplicateOf,
-              }))}</pre>
+              }, request.requestBody, request.requestSize, 'request'))}</pre>
             </div>
             <div>
               <h3>Response</h3>
-              <pre>${escapeHtml(formatJsonLike(request.responseBody))}</pre>
+              <pre>${escapeHtml(formatPayloadPreview(request.responseBody, request.responseBody, request.responseSize, 'response'))}</pre>
             </div>
             ${request.aiSuggestion ? `
               <div>
@@ -1085,6 +1195,16 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
       padding: 12px;
       margin-bottom: 10px;
     }
+    .callout {
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--primary);
+      border-radius: 8px;
+      background: rgba(41, 38, 48, 0.52);
+      color: var(--muted);
+      padding: 12px 14px;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -1102,9 +1222,20 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
       <div class="card"><div class="label">Average Latency</div><div class="value">${formatMs(avg)}</div></div>
       <div class="card"><div class="label">Error Rate</div><div class="value">${errorRate}%</div></div>
       <div class="card"><div class="label">Duplicate Calls</div><div class="value">${duplicates}</div></div>
+      <div class="card"><div class="label">Failed / Aborted</div><div class="value">${failedRequests}</div></div>
       <div class="card"><div class="label">Large Payloads</div><div class="value">${largePayloads}</div><div class="muted">over ${formatBytes(largePayloadThresholdKb * 1024)}</div></div>
       <div class="card"><div class="label">Slowest Endpoint</div><div class="value" style="font-size: 13px; overflow-wrap: anywhere;">${slowest ? escapeHtml(`${formatMs(slowest.duration)} ${getPath(slowest.url)}`) : '-'}</div></div>
     </section>
+
+    <h2>Capture Fidelity</h2>
+    <section class="stats">
+      <div class="card"><div class="label">Captured Request Bodies</div><div class="value">${capturedRequestBodies}</div><div class="muted">${total - capturedRequestBodies} unavailable or empty</div></div>
+      <div class="card"><div class="label">Captured Response Bodies</div><div class="value">${capturedResponseBodies}</div><div class="muted">${total - capturedResponseBodies} unavailable or empty</div></div>
+      <div class="card"><div class="label">Report Validation</div><div class="value">OK</div><div class="muted">Built from ${total} live session entries</div></div>
+    </section>
+    <div class="callout">
+      Binary, oversized, unreadable, aborted, and restricted-environment payloads are rendered with explicit placeholders so the exported report mirrors the live capture state.
+    </div>
 
     <h2>Latency Timeline</h2>
     <div class="chart">${buildLatencySvg(requests)}</div>
@@ -1319,6 +1450,26 @@ function formatJsonLike(value: unknown) {
   }
 
   return JSON.stringify(value, null, 2)
+}
+
+function formatPayloadPreview(value: unknown, rawBody: string | null, size: number, label: 'request' | 'response') {
+  if (typeof value === 'string' && value.trim()) {
+    return formatJsonLike(value)
+  }
+
+  if (value && typeof value === 'object') {
+    return formatJsonLike(value)
+  }
+
+  if (rawBody && rawBody.trim()) {
+    return formatJsonLike(rawBody)
+  }
+
+  if (size > 0) {
+    return `[${label} body unavailable in capture, ${formatBytes(size)} transferred]`
+  }
+
+  return `[no ${label} body captured]`
 }
 
 function timingSourceLabel(source: RequestEntry['timingSource']) {

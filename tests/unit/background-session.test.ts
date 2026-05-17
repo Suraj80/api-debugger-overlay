@@ -146,6 +146,36 @@ describe('background session helpers', () => {
     expect(inferDependencies(downstream, [upstream, unrelated])).toEqual(['upstream'])
   })
 
+  it('prefers the closest high-signal dependency when several requests share values', async () => {
+    installChromeMock()
+    const { inferDependencies } = await import('../../src/background/index')
+
+    const earlier = createRequest({
+      id: 'earlier',
+      url: 'https://api.example.com/users/42',
+      startTime: 1_000,
+      duration: 200,
+      responseBody: JSON.stringify({ data: { projectId: 'proj_abc123' } }),
+    })
+
+    const closer = createRequest({
+      id: 'closer',
+      url: 'https://api.example.com/projects/proj_abc123',
+      startTime: 1_220,
+      duration: 80,
+      responseBody: JSON.stringify({ data: { projectId: 'proj_abc123', ownerId: 'user_777777' } }),
+    })
+
+    const downstream = createRequest({
+      id: 'downstream',
+      url: 'https://api.example.com/projects/proj_abc123/details',
+      startTime: 1_330,
+      requestBody: JSON.stringify({ ownerId: 'user_777777' }),
+    })
+
+    expect(inferDependencies(downstream, [earlier, closer])).toEqual(['closer', 'earlier'])
+  })
+
   it('does not infer dependencies when timing or payload correlation is missing', async () => {
     installChromeMock()
     const { inferDependencies } = await import('../../src/background/index')
@@ -172,6 +202,28 @@ describe('background session helpers', () => {
 
     expect(inferDependencies(tooLate, [upstream])).toEqual([])
     expect(inferDependencies(noSharedValue, [upstream])).toEqual([])
+  })
+
+  it('can infer dependencies from prior request signals even when response parsing is unavailable', async () => {
+    installChromeMock()
+    const { inferDependencies } = await import('../../src/background/index')
+
+    const upstream = createRequest({
+      id: 'upstream',
+      url: 'https://api.example.com/search?cursor=cursor_abcdef123456',
+      startTime: 1_000,
+      duration: 120,
+      requestBody: 'cursor=cursor_abcdef123456',
+      responseBody: null,
+    })
+
+    const downstream = createRequest({
+      id: 'downstream',
+      url: 'https://api.example.com/results/cursor_abcdef123456',
+      startTime: 1_150,
+    })
+
+    expect(inferDependencies(downstream, [upstream])).toEqual(['upstream'])
   })
 
   it('routes replay requests back into the tab and returns fallback errors on failure', async () => {

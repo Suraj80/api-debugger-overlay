@@ -21,6 +21,9 @@ async function startTestServer() {
             <button id="large-payload">Large payload</button>
             <button id="dependency-chain">Dependency chain</button>
             <button id="slow-request">Slow request</button>
+            <button id="abort-request">Abort request</button>
+            <button id="binary-request">Binary request</button>
+            <button id="form-request">Form request</button>
             <script>
               document.querySelector('#fetch-users').addEventListener('click', async () => {
                 await fetch('/api/users?b=2&a=1')
@@ -45,6 +48,21 @@ async function startTestServer() {
               })
               document.querySelector('#slow-request').addEventListener('click', () => {
                 fetch('/api/slow')
+              })
+              document.querySelector('#abort-request').addEventListener('click', async () => {
+                const controller = new AbortController()
+                const pending = fetch('/api/abortable', { signal: controller.signal }).catch(() => null)
+                setTimeout(() => controller.abort(), 30)
+                await pending
+              })
+              document.querySelector('#binary-request').addEventListener('click', async () => {
+                await fetch('/api/binary')
+              })
+              document.querySelector('#form-request').addEventListener('click', async () => {
+                const form = new FormData()
+                form.append('name', 'Ada')
+                form.append('role', 'engineer')
+                await fetch('/api/form', { method: 'POST', body: form })
               })
             </script>
           </body>
@@ -115,6 +133,38 @@ async function startTestServer() {
         'content-length': Buffer.byteLength(body),
       })
       res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/binary') {
+      const body = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7])
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-length': body.length,
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/form') {
+      const body = JSON.stringify({ ok: true })
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/abortable') {
+      req.on('aborted', () => {
+        res.destroy()
+      })
+      await new Promise(resolveDelay => setTimeout(resolveDelay, 1000))
+      if (!res.destroyed) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{"ok":true}')
+      }
       return
     }
 
@@ -240,5 +290,39 @@ test.describe('API Debugger extension', () => {
     const slowRow = overlay(page).locator('.apidbg-row', { hasText: '/api/slow' }).first()
     await slowRow.press('Enter')
     await expect(overlay(page).getByRole('button', { name: 'Ask AI' })).toBeVisible()
+  })
+
+  test('captures aborted requests and binary responses with explicit placeholders', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    await page.locator('#abort-request').click()
+    await page.locator('#binary-request').click()
+
+    await expect(overlay(page)).toContainText('/api/abortable')
+    await expect(overlay(page)).toContainText('/api/binary')
+
+    const abortedRow = overlay(page).locator('.apidbg-row', { hasText: '/api/abortable' }).first()
+    await abortedRow.press('Enter')
+    await expect(overlay(page)).toContainText('Request aborted')
+
+    const binaryRow = overlay(page).locator('.apidbg-row', { hasText: '/api/binary' }).first()
+    await binaryRow.press('Enter')
+    await expect(overlay(page)).toContainText('Binary response omitted')
+  })
+
+  test('captures form submissions and preserves request payload details', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    await page.locator('#form-request').click()
+
+    const formRow = overlay(page).locator('.apidbg-row', { hasText: '/api/form' }).first()
+    await formRow.press('Enter')
+    await overlay(page).getByRole('button', { name: 'request' }).click()
+
+    await expect(overlay(page).getByRole('tree', { name: 'Request JSON tree' })).toBeVisible()
+    await expect(overlay(page)).toContainText('name=Ada')
+    await expect(overlay(page)).toContainText('role=engineer')
   })
 })

@@ -72,11 +72,39 @@ interface CdpRequestState {
   url: string
   method: string
   wallTime: number
-  sentAt: number
+  finishedAt: number
   matchedRequestId?: string
   status?: number
   timing?: CdpTimingData
   encodedDataLength?: number
+}
+
+interface CdpRequestWillBeSentParams {
+  requestId?: unknown
+  request?: {
+    url?: unknown
+    method?: unknown
+  }
+  wallTime?: unknown
+  timestamp?: unknown
+}
+
+interface CdpResponseReceivedParams {
+  requestId?: unknown
+  response?: {
+    status?: unknown
+    timing?: unknown
+  }
+}
+
+interface CdpLoadingFinishedParams {
+  requestId?: unknown
+  encodedDataLength?: unknown
+  timestamp?: unknown
+}
+
+interface CdpLoadingFailedParams {
+  requestId?: unknown
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -289,7 +317,7 @@ function buildCdpTimingPayload(requestId: string, cdpRequest: CdpRequestState): 
 
   const timing = cdpRequest.timing
   const duration = cdpRequest.encodedDataLength != null
-    ? Math.max(0, Math.round((cdpRequest.sentAt - timing.requestTime) * 1000))
+    ? Math.max(0, Math.round((cdpRequest.finishedAt - timing.requestTime) * 1000))
     : 0
 
   return {
@@ -615,45 +643,40 @@ export function inferDependencies(
   newRequest: RequestEntry,
   existingRequests: RequestEntry[],
 ): string[] {
-  const dependsOn: string[] = []
   const newStart = newRequest.startTime
+  const newSignals = extractRequestSignals(newRequest)
+  const candidates: Array<{ id: string; score: number }> = []
 
   for (const existing of existingRequests) {
     if (existing.id === newRequest.id) continue
 
     const existingEnd = existing.startTime + existing.duration
-    const timingMatch =
-      newStart >= existingEnd &&
-      newStart <= existingEnd + 800
+    const deltaMs = newStart - existingEnd
+    if (deltaMs < 0 || deltaMs > 1500) continue
 
-    if (!timingMatch) continue
-    if (!existing.responseBody) continue
+    const timingScore = scoreDependencyTiming(deltaMs)
+    if (timingScore <= 0) continue
 
-    let sharedValue = false
-    try {
-      const values = extractLeafValues(JSON.parse(existing.responseBody))
-      for (const val of values) {
-        if (
-          val.length > 4 &&
-          (
-            newRequest.url.includes(val) ||
-            (newRequest.requestBody ?? '').includes(val)
-          )
-        ) {
-          sharedValue = true
-          break
-        }
-      }
-    } catch {
-      continue
-    }
+    const existingSignals = extractRequestSignals(existing)
+    const sharedValues = intersectSignals(existingSignals, newSignals)
+    if (sharedValues.length === 0) continue
 
-    if (sharedValue) {
-      dependsOn.push(existing.id)
+    const hostScore = sameOrigin(existing.url, newRequest.url) ? 1.5 : 0
+    const pathScore = sharedPathPrefix(existing.url, newRequest.url) ? 1 : 0
+    const tokenScore = sharedValues
+      .slice(0, 4)
+      .reduce((sum, value) => sum + scoreSignal(value), 0)
+    const score = timingScore + hostScore + pathScore + tokenScore
+
+    if (score >= 5.5) {
+      candidates.push({ id: existing.id, score })
     }
   }
 
-  return dependsOn
+  return candidates
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3)
+    .map(candidate => candidate.id)
 }
 
 export function extractLeafValues(obj: unknown, depth = 0): string[] {
@@ -668,6 +691,115 @@ export function extractLeafValues(obj: unknown, depth = 0): string[] {
     return Object.values(obj).flatMap(v => extractLeafValues(v, depth + 1))
   }
   return []
+}
+
+function extractRequestSignals(request: RequestEntry) {
+  const values = new Set<string>()
+  const addValue = (value: string) => {
+    const normalized = normalizeSignal(value)
+    if (!normalized) return
+    values.add(normalized)
+  }
+
+  extractUrlSignals(request.url).forEach(addValue)
+  extractTextSignals(request.requestBody).forEach(addValue)
+  extractJsonSignals(request.requestBody).forEach(addValue)
+  extractJsonSignals(request.responseBody).forEach(addValue)
+
+  return values
+}
+
+function extractUrlSignals(url: string) {
+  try {
+    const parsed = new URL(url)
+    const signals = [
+      ...parsed.pathname.split('/'),
+      ...parsed.searchParams.keys(),
+      ...Array.from(parsed.searchParams.values()),
+    ]
+
+    return signals.flatMap(value => tokenizeSignal(value))
+  } catch {
+    return tokenizeSignal(url)
+  }
+}
+
+function extractTextSignals(value: string | null) {
+  if (!value) return []
+  return tokenizeSignal(value)
+}
+
+function extractJsonSignals(value: string | null) {
+  if (!value) return []
+
+  try {
+    return extractLeafValues(JSON.parse(value)).flatMap(item => tokenizeSignal(item))
+  } catch {
+    return []
+  }
+}
+
+function tokenizeSignal(value: string) {
+  return value
+    .split(/[^a-zA-Z0-9:_-]+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+}
+
+function normalizeSignal(value: string) {
+  const normalized = value.trim().toLowerCase()
+  if (normalized.length < 3) return ''
+  if (/^(true|false|null|undefined|ok|data|items|list|page|limit|offset|sort|order|desc|asc)$/i.test(normalized)) return ''
+  if (/^\d{1,2}$/.test(normalized)) return ''
+  return normalized
+}
+
+function intersectSignals(left: Set<string>, right: Set<string>) {
+  const shared: string[] = []
+
+  for (const value of left) {
+    if (right.has(value)) {
+      shared.push(value)
+    }
+  }
+
+  return shared.sort((a, b) => scoreSignal(b) - scoreSignal(a))
+}
+
+function scoreDependencyTiming(deltaMs: number) {
+  if (deltaMs <= 50) return 5
+  if (deltaMs <= 150) return 4
+  if (deltaMs <= 400) return 2.5
+  if (deltaMs <= 800) return 1.5
+  if (deltaMs <= 1500) return 0.5
+  return 0
+}
+
+function scoreSignal(value: string) {
+  if (/^[0-9a-f]{8}-[0-9a-f-]{20,}$/i.test(value)) return 4.5
+  if (/^[a-z0-9_-]{10,}$/i.test(value)) return 3.5
+  if (/^\d{3,}$/.test(value)) return 2.5
+  if (value.length >= 6) return 2
+  return 1
+}
+
+function sameOrigin(left: string, right: string) {
+  try {
+    return new URL(left).origin === new URL(right).origin
+  } catch {
+    return false
+  }
+}
+
+function sharedPathPrefix(left: string, right: string) {
+  try {
+    const leftParts = new URL(left).pathname.split('/').filter(Boolean)
+    const rightParts = new URL(right).pathname.split('/').filter(Boolean)
+    if (leftParts.length === 0 || rightParts.length === 0) return false
+    return leftParts[0] === rightParts[0]
+  } catch {
+    return false
+  }
 }
 
 function findRecentNetworkEvent(tabId: number, method: string, url: string, now = Date.now()) {
@@ -804,41 +936,57 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   const cdpRequests = getCdpRequests(tabId)
 
   if (method === 'Network.requestWillBeSent') {
-    const requestId = String(params.requestId)
-    cdpRequests.set(requestId, {
-      requestId,
-      url: String(params.request.url),
-      method: String(params.request.method).toUpperCase(),
-      wallTime: Math.round(Number(params.wallTime) * 1000),
-      sentAt: Number(params.timestamp),
+    const requestParams = params as CdpRequestWillBeSentParams
+    const request = requestParams.request
+    const requestId = requestParams.requestId
+    const wallTime = requestParams.wallTime
+    const timestamp = requestParams.timestamp
+
+    if (!request || request.url == null || request.method == null || requestId == null || wallTime == null || timestamp == null) {
+      return
+    }
+
+    cdpRequests.set(String(requestId), {
+      requestId: String(requestId),
+      url: String(request.url),
+      method: String(request.method).toUpperCase(),
+      wallTime: Math.round(Number(wallTime) * 1000),
+      finishedAt: Number(timestamp),
     })
     return
   }
 
   if (method === 'Network.responseReceived') {
-    const requestId = String(params.requestId)
-    const current = cdpRequests.get(requestId)
+    const responseParams = params as CdpResponseReceivedParams
+    const requestId = responseParams.requestId
+    const response = responseParams.response
+    if (requestId == null || !response) return
+
+    const current = cdpRequests.get(String(requestId))
     if (!current) return
 
-    cdpRequests.set(requestId, {
+    cdpRequests.set(String(requestId), {
       ...current,
-      status: Number(params.response.status),
-      timing: params.response.timing as CdpTimingData | undefined,
+      status: Number(response.status),
+      timing: response.timing as CdpTimingData | undefined,
     })
     return
   }
 
   if (method === 'Network.loadingFinished') {
-    const requestId = String(params.requestId)
-    const current = cdpRequests.get(requestId)
+    const loadingFinishedParams = params as CdpLoadingFinishedParams
+    const requestId = loadingFinishedParams.requestId
+    if (requestId == null) return
+
+    const current = cdpRequests.get(String(requestId))
     if (!current) return
 
     const completed = {
       ...current,
-      encodedDataLength: Number(params.encodedDataLength ?? 0),
-      sentAt: Number(params.timestamp),
+      encodedDataLength: Number(loadingFinishedParams.encodedDataLength ?? 0),
+      finishedAt: Number(loadingFinishedParams.timestamp ?? current.finishedAt),
     }
-    cdpRequests.set(requestId, completed)
+    cdpRequests.set(String(requestId), completed)
 
     if (completed.matchedRequestId) {
       const timingPayload = buildCdpTimingPayload(completed.matchedRequestId, completed)
@@ -850,8 +998,11 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   }
 
   if (method === 'Network.loadingFailed') {
-    const requestId = String(params.requestId)
-    cdpRequests.delete(requestId)
+    const loadingFailedParams = params as CdpLoadingFailedParams
+    const requestId = loadingFailedParams.requestId
+    if (requestId == null) return
+
+    cdpRequests.delete(String(requestId))
   }
 })
 

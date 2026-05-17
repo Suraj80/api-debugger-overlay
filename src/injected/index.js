@@ -17,8 +17,6 @@ let settings = { ...DEFAULT_SETTINGS }
 const xhrMeta = new WeakMap()
 const MAX_FINGERPRINTS = 1000
 const seenFingerprints = new Set()
-const performanceEntries = []
-const MAX_PERFORMANCE_ENTRIES = 300
 const pendingObservedRequests = []
 const MATCH_WINDOW_MS = 5000
 
@@ -91,12 +89,7 @@ function toAbsoluteTime(relativeTime) {
 }
 
 function rememberPerformanceEntries(entries) {
-  performanceEntries.push(...entries)
   processPerformanceEntries(entries)
-
-  if (performanceEntries.length > MAX_PERFORMANCE_ENTRIES) {
-    performanceEntries.splice(0, performanceEntries.length - MAX_PERFORMANCE_ENTRIES)
-  }
 }
 
 function startPerformanceObserver() {
@@ -149,6 +142,16 @@ function getContentLength(headers) {
   return parseContentLength(headers?.get?.('content-length'))
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes < 1024) return `${bytes || 0} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function buildPayloadNotice(label, parts) {
+  return `[${label}: ${parts.filter(Boolean).join(', ')}]`
+}
+
 async function captureFetchResponsePayload(response) {
   try {
     const contentType = response.headers?.get?.('content-type') || ''
@@ -158,27 +161,41 @@ async function captureFetchResponsePayload(response) {
     if (contentLength > largePayloadThresholdBytes) {
       return {
         responseSize: contentLength,
-        responseBody: null,
+        responseBody: buildPayloadNotice('Response body omitted', [
+          `over capture limit ${formatBytes(largePayloadThresholdBytes)}`,
+          formatBytes(contentLength),
+          contentType || 'unknown content type',
+        ]),
       }
     }
 
     if (!isTextLikeContentType(contentType)) {
       return {
         responseSize: contentLength,
-        responseBody: null,
+        responseBody: buildPayloadNotice('Binary response omitted', [
+          contentType || 'unknown content type',
+          contentLength ? formatBytes(contentLength) : '',
+        ]),
       }
     }
 
     const buffer = await response.clone().arrayBuffer()
+    const decoded = decodeCapturedBody(buffer, contentType)
 
     return {
       responseSize: contentLength || buffer.byteLength,
-      responseBody: decodeCapturedBody(buffer, contentType),
+      responseBody: decoded ?? buildPayloadNotice('Response body unavailable', [
+        'unable to decode captured payload',
+        contentType || 'unknown content type',
+        formatBytes(contentLength || buffer.byteLength),
+      ]),
     }
-  } catch {
+  } catch (error) {
     return {
       responseSize: 0,
-      responseBody: null,
+      responseBody: buildPayloadNotice('Response body unavailable', [
+        error instanceof Error ? error.message : String(error),
+      ]),
     }
   }
 }
@@ -192,7 +209,11 @@ function captureXhrResponsePayload(xhr) {
     if (contentLength > largePayloadThresholdBytes) {
       return {
         responseSize: contentLength,
-        responseBody: null,
+        responseBody: buildPayloadNotice('Response body omitted', [
+          `over capture limit ${formatBytes(largePayloadThresholdBytes)}`,
+          formatBytes(contentLength),
+          contentType || 'unknown content type',
+        ]),
       }
     }
 
@@ -215,53 +236,64 @@ function captureXhrResponsePayload(xhr) {
     }
 
     if (xhr.response instanceof ArrayBuffer) {
+      const decoded = decodeCapturedBody(xhr.response, contentType)
       return {
         responseSize: xhr.response.byteLength,
-        responseBody: decodeCapturedBody(xhr.response, contentType),
+        responseBody: decoded ?? buildPayloadNotice('Binary response omitted', [
+          contentType || xhr.responseType || 'arraybuffer',
+          formatBytes(xhr.response.byteLength),
+        ]),
       }
     }
 
     if (xhr.response instanceof Blob) {
       return {
         responseSize: xhr.response.size,
-        responseBody: null,
+        responseBody: buildPayloadNotice('Binary response omitted', [
+          xhr.response.type || contentType || 'blob',
+          formatBytes(xhr.response.size),
+        ]),
       }
     }
 
     return {
       responseSize: getBodySize(xhr.response),
-      responseBody: null,
+      responseBody: buildPayloadNotice('Response body unavailable', [
+        xhr.responseType || 'unsupported XHR response type',
+      ]),
     }
-  } catch {
+  } catch (error) {
     return {
       responseSize: 0,
-      responseBody: null,
+      responseBody: buildPayloadNotice('Response body unavailable', [
+        error instanceof Error ? error.message : String(error),
+      ]),
     }
   }
 }
 
+function safePostMessage(message) {
+  try {
+    window.postMessage(message, '*')
+  } catch {
+    // Some restrictive page environments can block message bridging.
+  }
+}
+
 function postRequestComplete(entry) {
-  window.postMessage({
+  safePostMessage({
     source: 'api-debugger-injected',
     type: 'REQUEST_COMPLETE',
     payload: entry
-  }, '*')
+  })
 }
 
 function postTimingUpdate(payload) {
-  window.postMessage({
+  safePostMessage({
     source: 'api-debugger-injected',
     type: 'TIMING_UPDATE',
     payload,
-  }, '*')
-}
-
-function postRequestFailed(payload) {
-  window.postMessage({
-    source: 'api-debugger-injected',
-    type: 'REQUEST_FAILED',
-    payload
-  }, '*')
+  })
 }
 
 window.addEventListener('message', (event) => {
@@ -485,7 +517,7 @@ function matchPerformanceEntry(entry) {
 function processPerformanceEntries(entries) {
   for (const entry of entries) {
     if (entry.entryType !== 'resource') continue
-    if (entry.initiatorType !== 'fetch' && entry.initiatorType !== 'xmlhttprequest') continue
+    if (entry.initiatorType !== 'fetch' && entry.initiatorType !== 'xmlhttprequest' && entry.initiatorType !== 'other') continue
 
     matchPerformanceEntry(entry)
   }
@@ -556,7 +588,7 @@ function fnv1aHash(value) {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-window.fetch = async (input, init) => {
+const interceptedFetch = async (input, init) => {
   if (!settings.captureEnabled || !settings.captureFetch) {
     return originalFetch(input, init)
   }
@@ -604,12 +636,28 @@ window.fetch = async (input, init) => {
     if (pendingIndex >= 0) {
       pendingObservedRequests.splice(pendingIndex, 1)
     }
-    postRequestFailed({ url, method, error: String(error) })
+    postRequestComplete(createRequestEntry({
+      id: requestId,
+      url,
+      method,
+      status: 0,
+      duration: Math.round(performance.now() - startTime),
+      startTime: toAbsoluteTime(startTime),
+      requestSize: getBodySize(requestBodySource),
+      requestHeaders,
+      requestBody,
+      responseSize: 0,
+      responseBody: buildPayloadNotice(error?.name === 'AbortError' ? 'Request aborted' : 'Request failed', [
+        error instanceof Error ? error.message : String(error),
+      ]),
+      body: requestBodySource,
+      ttfb: 0,
+    }))
     throw error
   }
 }
 
-XMLHttpRequest.prototype.open = function (method, url, async, user, password) {
+const interceptedXhrOpen = function (method, url, async, user, password) {
   if (settings.captureEnabled && settings.captureXHR) {
     xhrMeta.set(this, {
       id: crypto.randomUUID(),
@@ -627,7 +675,7 @@ XMLHttpRequest.prototype.open = function (method, url, async, user, password) {
   return originalXhrOpen.apply(this, arguments)
 }
 
-XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+const interceptedXhrSetRequestHeader = function (name, value) {
   const meta = xhrMeta.get(this)
 
   if (meta) {
@@ -637,7 +685,7 @@ XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
   return originalXhrSetRequestHeader.apply(this, arguments)
 }
 
-XMLHttpRequest.prototype.send = function (body) {
+const interceptedXhrSend = function (body) {
   const meta = xhrMeta.get(this)
 
   if (!meta || !settings.captureEnabled || !settings.captureXHR) {
@@ -677,16 +725,35 @@ XMLHttpRequest.prototype.send = function (body) {
     xhrMeta.delete(this)
   }
 
-  const handleError = () => {
+  const handleError = (event) => {
     const pendingIndex = pendingObservedRequests.findIndex(pending => pending.id === meta.id)
     if (pendingIndex >= 0) {
       pendingObservedRequests.splice(pendingIndex, 1)
     }
-    postRequestFailed({
+    const errorLabel = event?.type === 'abort'
+      ? 'Request aborted'
+      : event?.type === 'timeout'
+        ? 'Request timed out'
+        : 'Request failed'
+
+    postRequestComplete(createRequestEntry({
+      id: meta.id,
       url: meta.url,
       method: meta.method,
-      error: 'XMLHttpRequest failed'
-    })
+      status: this.status || 0,
+      duration: Math.round(performance.now() - meta.startTime),
+      startTime: toAbsoluteTime(meta.startTime),
+      requestSize: meta.requestSize,
+      requestHeaders: meta.requestHeaders,
+      requestBody: meta.requestBody,
+      responseSize: 0,
+      responseBody: buildPayloadNotice(errorLabel, [
+        event?.type || 'network error',
+      ]),
+      body,
+      ttfb: 0,
+    }))
+    xhrMeta.delete(this)
   }
 
   this.addEventListener('loadend', handleLoadEnd, { once: true })
@@ -695,6 +762,20 @@ XMLHttpRequest.prototype.send = function (body) {
   this.addEventListener('timeout', handleError, { once: true })
 
   return originalXhrSend.apply(this, arguments)
+}
+
+try {
+  window.fetch = interceptedFetch
+} catch {
+  // Some pages lock down fetch reassignment. XHR capture may still work.
+}
+
+try {
+  XMLHttpRequest.prototype.open = interceptedXhrOpen
+  XMLHttpRequest.prototype.setRequestHeader = interceptedXhrSetRequestHeader
+  XMLHttpRequest.prototype.send = interceptedXhrSend
+} catch {
+  // Some pages lock down XHR prototypes. Fetch capture may still work.
 }
 
 window.setInterval(() => {
@@ -731,7 +812,7 @@ async function replayRequest(requestId, request) {
     const contentType = response.headers.get('content-type') || ''
     const buffer = await response.clone().arrayBuffer()
 
-    window.postMessage({
+    safePostMessage({
       source: 'api-debugger-injected',
       type: 'API_DEBUGGER_REPLAY_RESULT',
       requestId,
@@ -741,9 +822,9 @@ async function replayRequest(requestId, request) {
         responseBody: decodeCapturedBody(buffer, contentType),
         responseHeaders,
       },
-    }, '*')
+    })
   } catch (error) {
-    window.postMessage({
+    safePostMessage({
       source: 'api-debugger-injected',
       type: 'API_DEBUGGER_REPLAY_RESULT',
       requestId,
@@ -753,6 +834,6 @@ async function replayRequest(requestId, request) {
         responseBody: String(error),
         responseHeaders: {},
       },
-    }, '*')
+    })
   }
 }
