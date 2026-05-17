@@ -63,11 +63,33 @@ export interface ReplayResult {
   responseHeaders: Record<string, string>
 }
 
+export interface AISuggestionRequest {
+  method: string
+  url: string
+  status: number
+  duration: number
+  ttfb: number
+  responseSize: number
+  isSlow: boolean
+  isDuplicate: boolean
+  duplicateCount: number
+  dependsOnCount: number
+}
+
+export interface AISuggestionResponse {
+  ok: boolean
+  suggestion?: string
+  error?: string
+  retryAfterMs?: number
+}
+
 export type ExtensionMessage =
   | { type: 'REQUEST_COMPLETE'; payload: RequestEntry }
   | { type: 'REQUEST_UPDATED'; payload: RequestEntry }
   | { type: 'TIMING_UPDATE'; payload: TimingUpdatePayload }
   | { type: 'SET_PRECISE_MODE'; payload: { enabled: boolean } }
+  | { type: 'ASK_AI_SUGGESTION'; payload: AISuggestionRequest }
+  | { type: 'TEST_AI_CONNECTION' }
   | { type: 'REQUEST_FAILED'; payload: { url: string; error: string } }
   | { type: 'CLEAR_SESSION' }
   | { type: 'GET_SESSION'; tabId?: number }

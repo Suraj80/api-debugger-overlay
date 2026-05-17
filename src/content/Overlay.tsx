@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import type { RequestEntry } from '../shared/types'
+import type { AISuggestionResponse, RequestEntry } from '../shared/types'
 import type { ApiDebuggerSettings } from '../shared/settings'
 import { useSettings } from '../shared/SettingsContext'
 import { sendRuntimeMessage } from '../shared/sendMessage'
@@ -1099,7 +1099,6 @@ function AICard({
 }
 
 function RequestRow({ req }: { req: RequestEntry }) {
-  const settings = useSettings()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<JsonTab>('response')
   const [search, setSearch] = useState('')
@@ -1125,56 +1124,31 @@ function RequestRow({ req }: { req: RequestEntry }) {
   const jsonValue = tab === 'response' ? parsedBody ?? { body: null } : requestObj
 
   const triggerAI = async () => {
-    if (!settings.apiKey) {
-      setAiState('error')
-      setAiError('API key not configured. Add your Anthropic key in settings.')
-      return
-    }
-
     setAiState('loading')
     setAiError('')
 
     try {
-      const sanitizedUrl = req.url
-        .replace(/\/\d+/g, '/:id')
-        .replace(/[?&][^=]+=\d+/g, '')
-
-      const prompt = [
-        `An API request was flagged as ${req.isSlow ? 'slow' : 'failed'}.`,
-        `Method: ${req.method}`,
-        `Endpoint: ${sanitizedUrl}`,
-        `Status: ${req.status}`,
-        `Duration: ${req.duration}ms`,
-        `TTFB: ${req.ttfb}ms`,
-        `Response size: ${req.responseSize} bytes`,
-        req.isDuplicate ? `This endpoint was called ${req.duplicateCount} times this session.` : '',
-        '',
-        'In 2-3 sentences, diagnose the most likely cause and suggest one specific fix.',
-        'Be concrete. Do not give generic advice.',
-      ].filter(Boolean).join('\n')
-
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': settings.apiKey,
-          'anthropic-version': '2023-06-01',
+      const response = await sendRuntimeMessage({
+        type: 'ASK_AI_SUGGESTION',
+        payload: {
+          method: req.method,
+          url: req.url,
+          status: req.status,
+          duration: req.duration,
+          ttfb: req.ttfb,
+          responseSize: req.responseSize,
+          isSlow: req.isSlow,
+          isDuplicate: req.isDuplicate,
+          duplicateCount: req.duplicateCount,
+          dependsOnCount: req.dependsOn.length,
         },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 300,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      })
+      }) as AISuggestionResponse | undefined
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({})) as { error?: { message?: string } }
-        throw new Error(err.error?.message ?? `API error ${response.status}`)
+      if (!response?.ok) {
+        throw new Error(response?.error ?? 'Unable to ask AI. Check the extension service worker.')
       }
 
-      const data = await response.json() as { content?: Array<{ text?: string }> }
-      const suggestion = data.content?.[0]?.text ?? 'No suggestion returned.'
-      setAiSuggestion(suggestion)
+      setAiSuggestion(response.suggestion ?? 'No suggestion returned.')
       setAiState('result')
     } catch (err: unknown) {
       setAiState('error')

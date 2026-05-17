@@ -1,4 +1,6 @@
 import type {
+  AISuggestionRequest,
+  AISuggestionResponse,
   ReplayRequest,
   ReplayResult,
   ReplayTargetSnapshot,
@@ -7,6 +9,7 @@ import type {
   TimingSource,
   TimingUpdatePayload,
 } from '../shared/types'
+import { getSettings } from '../shared/settings'
 
 // MV3 service worker - no DOM, no window object
 // Central message hub and in-memory session store for the extension
@@ -17,6 +20,11 @@ const NETWORK_MATCH_WINDOW_MS = 5000
 const PENDING_REQUEST_FALLBACK_MS = 1000
 const PENDING_REQUEST_CLEANUP_MS = 5000
 const CDP_MATCH_WINDOW_MS = 5000
+const AI_RATE_LIMIT_MS = 10000
+const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
+const ANTHROPIC_VERSION = '2023-06-01'
+const AI_MODEL = 'claude-sonnet-4-20250514'
+const AI_TEST_MODEL = 'claude-haiku-4-5-20251001'
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayRequest>()
@@ -25,6 +33,7 @@ const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
 const pendingRequestsByTab = new Map<number, Map<string, PendingRequestState>>()
 const attachedDebuggerTabs = new Set<number>()
 const cdpRequestsByTab = new Map<number, Map<string, CdpRequestState>>()
+let lastAiRequestAt = 0
 
 interface NetworkStatusEvent {
   method: string
@@ -393,6 +402,153 @@ async function setPreciseMode(enabled: boolean) {
   }
 }
 
+function sanitizeUrlForAi(url: string) {
+  try {
+    const parsedUrl = new URL(url)
+    parsedUrl.hash = ''
+
+    const sanitizedPath = parsedUrl.pathname
+      .split('/')
+      .map(segment => {
+        if (/^\d+$/.test(segment)) return ':id'
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(segment)) return ':uuid'
+        if (/^[0-9a-f]{16,}$/i.test(segment)) return ':hash'
+        return segment
+      })
+      .join('/')
+
+    const sanitizedParams = new URLSearchParams()
+    parsedUrl.searchParams.forEach((value, key) => {
+      if (/token|key|secret|password|auth|session/i.test(key)) return
+      if (/^\d+$/.test(value)) {
+        sanitizedParams.set(key, ':id')
+        return
+      }
+      if (value.length > 80) {
+        sanitizedParams.set(key, ':value')
+        return
+      }
+      sanitizedParams.set(key, value)
+    })
+
+    parsedUrl.pathname = sanitizedPath
+    parsedUrl.search = sanitizedParams.toString()
+    return parsedUrl.href
+  } catch {
+    return url
+      .replace(/\/\d+/g, '/:id')
+      .replace(/[?&][^=]*(token|key|secret|password|auth|session)[^=]*=[^&]*/gi, '')
+  }
+}
+
+export function buildAiSuggestionPrompt(request: AISuggestionRequest) {
+  const sanitizedUrl = sanitizeUrlForAi(request.url)
+
+  return [
+    `An API request was flagged as ${request.isSlow ? 'slow' : 'failed'}.`,
+    `Method: ${request.method}`,
+    `Endpoint: ${sanitizedUrl}`,
+    `Status: ${request.status}`,
+    `Duration: ${request.duration}ms`,
+    `TTFB: ${request.ttfb}ms`,
+    `Response size: ${request.responseSize} bytes`,
+    request.isDuplicate ? `This endpoint was called ${request.duplicateCount} times this session.` : '',
+    request.dependsOnCount > 0 ? `This request is part of a dependency chain with ${request.dependsOnCount} upstream request(s).` : '',
+    '',
+    'In 2-3 sentences, diagnose the most likely cause and suggest one specific fix.',
+    'Be concrete. Do not give generic advice.',
+  ].filter(Boolean).join('\n')
+}
+
+function parseAnthropicText(data: unknown) {
+  const content = (data as { content?: Array<{ text?: string }> }).content
+  return content?.find(item => typeof item.text === 'string')?.text ?? ''
+}
+
+async function getAnthropicApiKey() {
+  const settings = await getSettings()
+  return settings.apiKey.trim()
+}
+
+async function callAnthropic(apiKey: string, body: object) {
+  const response = await fetch(ANTHROPIC_MESSAGES_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': ANTHROPIC_VERSION,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({})) as { error?: { message?: string } }
+    throw new Error(errorBody.error?.message ?? `API error ${response.status}`)
+  }
+
+  return response.json()
+}
+
+async function testAiConnection(): Promise<AISuggestionResponse> {
+  const apiKey = await getAnthropicApiKey()
+  if (!apiKey) {
+    return { ok: false, error: 'API key not configured. Add your Anthropic key in settings.' }
+  }
+
+  try {
+    await callAnthropic(apiKey, {
+      model: AI_TEST_MODEL,
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    return { ok: true }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unable to connect to Anthropic.',
+    }
+  }
+}
+
+async function requestAiSuggestion(request: AISuggestionRequest): Promise<AISuggestionResponse> {
+  const apiKey = await getAnthropicApiKey()
+  if (!apiKey) {
+    return { ok: false, error: 'API key not configured. Add your Anthropic key in settings.' }
+  }
+
+  const now = Date.now()
+  const elapsed = now - lastAiRequestAt
+  if (elapsed < AI_RATE_LIMIT_MS) {
+    return {
+      ok: false,
+      error: `AI requests are rate limited. Try again in ${Math.ceil((AI_RATE_LIMIT_MS - elapsed) / 1000)}s.`,
+      retryAfterMs: AI_RATE_LIMIT_MS - elapsed,
+    }
+  }
+
+  lastAiRequestAt = now
+
+  try {
+    const data = await callAnthropic(apiKey, {
+      model: AI_MODEL,
+      max_tokens: 300,
+      messages: [{ role: 'user', content: buildAiSuggestionPrompt(request) }],
+    })
+    const suggestion = parseAnthropicText(data)
+
+    return {
+      ok: true,
+      suggestion: suggestion || 'No suggestion returned.',
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown error. Check your API key.',
+    }
+  }
+}
+
 function rememberRequest(tabId: number, request: RequestEntry) {
   const receivedAt = Date.now()
   const networkEvent = findRecentNetworkEvent(tabId, request.method, request.url, receivedAt)
@@ -710,6 +866,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.warn('[API Debugger] Failed to change precise mode', error)
       sendResponse({ ok: false })
     })
+    return true
+  }
+
+  if (message.type === 'TEST_AI_CONNECTION') {
+    testAiConnection().then(sendResponse)
+    return true
+  }
+
+  if (message.type === 'ASK_AI_SUGGESTION') {
+    requestAiSuggestion(message.payload).then(sendResponse)
     return true
   }
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '../shared/settings'
+import type { AISuggestionResponse } from '../shared/types'
 import '../index.css'
 
 type TestState = 'idle' | 'loading' | 'ok' | 'err'
@@ -78,20 +79,20 @@ export function Popup() {
     setTestState('loading')
 
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey.trim(),
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1,
-          messages: [{ role: 'user', content: 'hi' }],
-        }),
+      await saveSettings({
+        captureEnabled: capturing,
+        captureFetch,
+        captureXHR,
+        preciseModeEnabled: preciseMode,
+        slowRequestThresholdMs: slowMs,
+        largePayloadThresholdKb: largeKb,
+        apiKey: apiKey.trim(),
+        overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
+        showOverlayOnLoad: showOnLoad,
       })
-      setTestState(res.ok ? 'ok' : 'err')
+      const response = await chrome.runtime.sendMessage({ type: 'TEST_AI_CONNECTION' }) as AISuggestionResponse | undefined
+
+      setTestState(response?.ok ? 'ok' : 'err')
     } catch {
       setTestState('err')
     }
@@ -173,7 +174,7 @@ export function Popup() {
                 {showKey ? 'Hide' : 'Show'}
               </button>
             </div>
-            <div className="api-popup-help">Stored locally. Only sent to api.anthropic.com.</div>
+            <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.anthropic.com.</div>
             <button
               className={`api-popup-test${testState === 'ok' ? ' is-ok' : ''}${testState === 'err' ? ' is-err' : ''}`}
               onClick={testConnection}

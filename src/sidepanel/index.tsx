@@ -68,6 +68,10 @@ export function SidePanel() {
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [replayTarget, setReplayTarget] = useState<ReplayRequest | null>(null)
 
+  const closeSidePanel = () => {
+    window.close()
+  }
+
   useEffect(() => {
     let cancelled = false
 
@@ -141,7 +145,15 @@ export function SidePanel() {
       <header className="api-sidepanel-header">
         <span className="api-sidepanel-title">API Debugger</span>
         {sessionTabId != null && <span className="api-muted">Tab {sessionTabId}</span>}
-        <button className="api-sidepanel-close" title="Close">x</button>
+        <button
+          className="api-sidepanel-close"
+          type="button"
+          title="Close"
+          aria-label="Close side panel"
+          onClick={closeSidePanel}
+        >
+          x
+        </button>
       </header>
 
       <nav className="api-sidepanel-tabs">

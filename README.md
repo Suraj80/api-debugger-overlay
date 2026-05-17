@@ -15,16 +15,14 @@ The project has the core extension scaffold and several PRD features implemented
 - Lazy JSON response viewer with tree expansion, search, copy JSON, and basic AI suggestion UI.
 - Side panel with session dashboard, latency chart, dependency graph view, and request replay view.
 - Request replay routed back through the original tab context so cookies/session state are preserved.
+- AI suggestion requests routed through the background service worker with sanitization and rate limiting.
+- Anthropic API key stored encrypted in `chrome.storage.local`, with migration from earlier plaintext storage.
+- Focused Vitest unit coverage for encrypted settings storage and AI prompt sanitization.
 
 Still pending from the PRD:
 
-- Real Anthropic/Claude API integration for `Ask AI`.
-- Sanitization and rate limiting before AI requests.
-- Encrypted API key storage.
-- Session HTML export implementation.
-- Actual dependency inference for `dependsOn`; the graph UI exists, but relationships are not populated yet.
+- Broader automated coverage for request interception, session metrics, replay, export, and E2E extension flows.
 - Per-node JSON path copy.
-- Full test coverage with Vitest and Playwright.
 - CI/CD workflow and Chrome Web Store packaging polish.
 
 ## Project Structure
@@ -103,9 +101,9 @@ Request replay is initiated from the overlay or side panel, sent through the ser
 
 Captured request data is processed locally in memory for the current tab session. Session data is cleared when the tab navigates or closes.
 
-The popup stores regular settings in `chrome.storage.sync` and the optional API key in `chrome.storage.local`. The PRD still requires encrypted API key storage before production release.
+The popup stores regular settings in `chrome.storage.sync` and stores the optional API key encrypted in `chrome.storage.local`.
 
-No request data is currently sent to external services. Future AI integration should send sanitized request context only when the user explicitly clicks `Ask AI`.
+No request data is sent to external services unless the user explicitly clicks `Ask AI`. In that case, sanitized request context is sent from the background service worker to `api.anthropic.com`, subject to a local rate limit.
 
 ## PRD Alignment
 
@@ -114,9 +112,9 @@ The implementation is currently closest to phases 1-3 of the PRD, with partial p
 - Phase 1: scaffold, injection, fetch/XHR interception, bridge, and basic overlay are implemented.
 - Phase 2: duplicate detection, latency alerts, payload sizing, and JSON viewer are partially to mostly implemented.
 - Phase 3: session metrics, Canvas chart, and popup settings are implemented. Regular settings now use sync storage; the API key remains local.
-- Phase 4: side panel and replay flow are partially implemented; dependency graph rendering exists, but inference is pending.
-- Phase 5: AI integration and HTML export are pending.
-- Phase 6: tests, polish, CI/CD, and release materials are pending.
+- Phase 4: side panel, replay flow, dependency graph rendering, and heuristic dependency inference are implemented.
+- Phase 5: AI integration and HTML export are implemented.
+- Phase 6: focused unit tests exist; broader test coverage, polish, CI/CD, and release materials are pending.
 
 ## Scripts
 
