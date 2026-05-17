@@ -75,10 +75,11 @@ pnpm lint
 Run tests:
 
 ```bash
-pnpm test
+pnpm test --run
+pnpm test:e2e
 ```
 
-Note: the test suite is not populated yet.
+The unit suite uses Vitest. The E2E suite uses Playwright to load the built extension into Chromium and exercise a local test page.
 
 ## Loading In Chrome
 
@@ -124,7 +125,13 @@ The implementation is currently closest to phases 1-3 of the PRD, with partial p
 | `pnpm build` | Build the Chrome extension into `dist` |
 | `pnpm preview` | Preview the Vite build |
 | `pnpm lint` | Run ESLint over `src` |
-| `pnpm test` | Run Vitest |
+| `pnpm test` | Run Vitest unit tests in `tests/unit` |
+| `pnpm test:e2e` | Run Playwright extension E2E tests |
+| `pnpm test:all` | Run unit and E2E tests |
+
+## CI
+
+GitHub Actions runs linting, unit tests, production build, and Playwright E2E tests on pushes and pull requests to `main`. E2E failures upload Playwright reports and traces as artifacts.
 
 ## License
 

@@ -1,0 +1,161 @@
+import { expect, test, chromium, type BrowserContext, type Page } from '@playwright/test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { createServer, type Server } from 'node:http'
+
+const extensionPath = resolve('dist')
+
+async function startTestServer() {
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+
+    if (url.pathname === '/') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(`<!doctype html>
+        <html>
+          <head><title>API Debugger E2E</title></head>
+          <body>
+            <button id="fetch-users">Fetch users twice</button>
+            <button id="xhr-profile">XHR profile</button>
+            <button id="large-payload">Large payload</button>
+            <script>
+              document.querySelector('#fetch-users').addEventListener('click', async () => {
+                await fetch('/api/users?b=2&a=1')
+                await fetch('/api/users?a=1&b=2')
+              })
+              document.querySelector('#xhr-profile').addEventListener('click', () => {
+                const xhr = new XMLHttpRequest()
+                xhr.open('POST', '/api/profile')
+                xhr.setRequestHeader('content-type', 'application/json')
+                xhr.send(JSON.stringify({ id: 42 }))
+              })
+              document.querySelector('#large-payload').addEventListener('click', () => {
+                fetch('/api/large')
+              })
+            </script>
+          </body>
+        </html>`)
+      return
+    }
+
+    if (url.pathname === '/api/users') {
+      const body = JSON.stringify({ data: { users: [{ id: 42, name: 'Ada' }] } })
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/profile') {
+      const body = JSON.stringify({ ok: true, profileId: 42 })
+      res.writeHead(201, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/large') {
+      const body = JSON.stringify({ data: 'x'.repeat(620 * 1024) })
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    res.writeHead(404, { 'content-type': 'text/plain' })
+    res.end('not found')
+  })
+
+  await new Promise<void>(resolveServer => {
+    server.listen(0, '127.0.0.1', resolveServer)
+  })
+
+  const address = server.address()
+  if (!address || typeof address === 'string') {
+    throw new Error('Unable to start E2E test server.')
+  }
+
+  return {
+    server,
+    url: `http://127.0.0.1:${address.port}/`,
+  }
+}
+
+async function launchExtension() {
+  const userDataDir = mkdtempSync(join(tmpdir(), 'api-debugger-e2e-'))
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    headless: false,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  })
+
+  return { context, userDataDir }
+}
+
+function overlay(page: Page) {
+  return page.locator('#api-debugger-root').locator('.apidbg-overlay')
+}
+
+test.describe('API Debugger extension', () => {
+  let server: Server
+  let serverUrl: string
+  let context: BrowserContext
+  let userDataDir: string
+  let page: Page
+
+  test.beforeAll(async () => {
+    const testServer = await startTestServer()
+    server = testServer.server
+    serverUrl = testServer.url
+
+    const extension = await launchExtension()
+    context = extension.context
+    userDataDir = extension.userDataDir
+    page = await context.newPage()
+  })
+
+  test.afterAll(async () => {
+    await context?.close()
+    await new Promise<void>(resolveServer => server?.close(() => resolveServer()))
+    if (userDataDir) {
+      rmSync(userDataDir, { recursive: true, force: true })
+    }
+  })
+
+  test('captures fetch, XHR, duplicates, and large payload warnings', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    await page.locator('#fetch-users').click()
+    await page.locator('#xhr-profile').click()
+    await page.locator('#large-payload').click()
+
+    await expect(overlay(page)).toContainText('/api/users')
+    await expect(overlay(page)).toContainText('/api/profile')
+    await expect(overlay(page)).toContainText('/api/large')
+    await expect(overlay(page)).toContainText('DUP x2')
+    await expect(overlay(page)).toContainText('LARGE')
+  })
+
+  test('opens request details and exposes JSON path copy controls', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    await page.locator('#fetch-users').click()
+
+    const usersRow = overlay(page).locator('.apidbg-row', { hasText: '/api/users' }).first()
+    await usersRow.press('Enter')
+
+    await expect(overlay(page).locator('[role="tree"]')).toBeVisible()
+    await expect(overlay(page).locator('.apidbg-json-copy', { hasText: 'Path' }).first()).toBeVisible()
+  })
+})

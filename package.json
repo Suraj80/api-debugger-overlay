@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
-    "test": "vitest"
+    "test": "vitest tests/unit",
+    "test:e2e": "playwright test",
+    "test:all": "pnpm test --run && pnpm test:e2e"
   },
   "dependencies": {
     "react": "^19.2.5",
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.4.0",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
     "@types/chrome": "^0.1.42",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
