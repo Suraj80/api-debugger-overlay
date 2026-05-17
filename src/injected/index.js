@@ -138,13 +138,41 @@ function decodeCapturedBody(buffer, contentType) {
   }
 }
 
+function parseContentLength(raw) {
+  if (!raw) return 0
+
+  const value = Number(raw)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function getContentLength(headers) {
+  return parseContentLength(headers?.get?.('content-length'))
+}
+
 async function captureFetchResponsePayload(response) {
   try {
     const contentType = response.headers?.get?.('content-type') || ''
+    const contentLength = getContentLength(response.headers)
+    const largePayloadThresholdBytes = settings.largePayloadThresholdKb * 1024
+
+    if (contentLength > largePayloadThresholdBytes) {
+      return {
+        responseSize: contentLength,
+        responseBody: null,
+      }
+    }
+
+    if (!isTextLikeContentType(contentType)) {
+      return {
+        responseSize: contentLength,
+        responseBody: null,
+      }
+    }
+
     const buffer = await response.clone().arrayBuffer()
 
     return {
-      responseSize: buffer.byteLength,
+      responseSize: contentLength || buffer.byteLength,
       responseBody: decodeCapturedBody(buffer, contentType),
     }
   } catch {
@@ -158,12 +186,21 @@ async function captureFetchResponsePayload(response) {
 function captureXhrResponsePayload(xhr) {
   try {
     const contentType = xhr.getResponseHeader?.('content-type') || ''
+    const contentLength = parseContentLength(xhr.getResponseHeader?.('content-length'))
+    const largePayloadThresholdBytes = settings.largePayloadThresholdKb * 1024
+
+    if (contentLength > largePayloadThresholdBytes) {
+      return {
+        responseSize: contentLength,
+        responseBody: null,
+      }
+    }
 
     if (xhr.responseType === '' || xhr.responseType === 'text') {
       const responseBody = xhr.responseText ?? ''
 
       return {
-        responseSize: getBodySize(responseBody),
+        responseSize: contentLength || getBodySize(responseBody),
         responseBody: isTextLikeContentType(contentType) ? responseBody : null,
       }
     }
@@ -172,7 +209,7 @@ function captureXhrResponsePayload(xhr) {
       const responseBody = xhr.response == null ? null : JSON.stringify(xhr.response)
 
       return {
-        responseSize: getBodySize(responseBody),
+        responseSize: contentLength || getBodySize(responseBody),
         responseBody,
       }
     }

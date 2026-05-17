@@ -536,10 +536,13 @@ async function requestAiSuggestion(request: AISuggestionRequest): Promise<AISugg
       messages: [{ role: 'user', content: buildAiSuggestionPrompt(request) }],
     })
     const suggestion = parseAnthropicText(data)
+    const finalSuggestion = suggestion || 'No suggestion returned.'
+
+    await persistAiSuggestionForRequest(request.id, finalSuggestion)
 
     return {
       ok: true,
-      suggestion: suggestion || 'No suggestion returned.',
+      suggestion: finalSuggestion,
     }
   } catch (error) {
     return {
@@ -745,6 +748,31 @@ function publishReplayTarget(tabId: number, request: ReplayRequest) {
     payload: request,
   }).catch(() => {
     // No extension page is currently listening.
+  })
+}
+
+async function persistAiSuggestionForRequest(requestId: string, suggestion: string) {
+  const tabId = await getActiveTabId()
+  if (tabId == null) return
+
+  const requests = getSession(tabId)
+  const matchIndex = requests.findIndex(request => request.id === requestId)
+  if (matchIndex === -1) return
+
+  const updatedRequest: RequestEntry = {
+    ...requests[matchIndex],
+    aiSuggestion: suggestion,
+  }
+  const nextRequests = [...requests]
+  nextRequests[matchIndex] = updatedRequest
+  sessionsByTab.set(tabId, nextRequests)
+  publishSession(tabId)
+
+  chrome.tabs.sendMessage(tabId, {
+    type: 'REQUEST_UPDATED',
+    payload: updatedRequest,
+  }).catch(() => {
+    // Tab may have navigated or closed - safe to ignore
   })
 }
 

@@ -64,6 +64,7 @@ export interface ReplayResult {
 }
 
 export interface AISuggestionRequest {
+  id: string
   method: string
   url: string
   status: number

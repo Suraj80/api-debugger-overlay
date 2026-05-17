@@ -48,6 +48,7 @@ function installChromeMock() {
 }
 
 const request: AISuggestionRequest = {
+  id: 'request-1',
   method: 'GET',
   url: 'https://api.example.com/users/123/orders/550e8400-e29b-41d4-a716-446655440000?token=secret&page=2&filter=active',
   status: 200,

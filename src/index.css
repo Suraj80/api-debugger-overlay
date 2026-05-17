@@ -337,6 +337,22 @@
   color: var(--api-danger);
 }
 
+.api-popup-test:focus-visible,
+.api-reset-button:focus-visible,
+.api-popup-eye:focus-visible,
+.api-toggle:focus-visible,
+.api-select:focus-visible,
+.api-sidepanel-close:focus-visible,
+.api-sidepanel-plain:focus-visible,
+.api-sidepanel-tab:focus-visible,
+.api-primary-wide:focus-visible,
+.api-replay-input:focus-visible,
+.api-replay-select:focus-visible,
+.api-replay-textarea:focus-visible {
+  outline: 2px solid var(--api-color-primary-soft);
+  outline-offset: 2px;
+}
+
 @keyframes api-spin {
   to {
     transform: rotate(360deg);
@@ -624,6 +640,11 @@
   resize: vertical;
 }
 
+.api-primary-wide:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .api-body-editor {
   position: relative;
 }
@@ -782,5 +803,16 @@
 .api-badge-warning {
   background: rgba(201, 167, 77, 0.18);
   color: var(--api-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 

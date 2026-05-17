@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import type { ReplayRequest, ReplayResult, ReplayTargetSnapshot, RequestEntry, SessionSnapshot } from '../shared/types'
+import { getSettings } from '../shared/settings'
 import '../index.css'
 
 type Tab = 'session' | 'deps' | 'replay'
@@ -156,7 +157,7 @@ export function SidePanel() {
         </button>
       </header>
 
-      <nav className="api-sidepanel-tabs">
+      <nav className="api-sidepanel-tabs" aria-label="Side panel views">
         {([
           ['session', 'Session'],
           ['deps', 'Dependency Map'],
@@ -166,6 +167,7 @@ export function SidePanel() {
             key={key}
             className={`api-sidepanel-tab${tab === key ? ' is-active' : ''}`}
             onClick={() => setTab(key)}
+            aria-pressed={tab === key}
           >
             {label}
           </button>
@@ -348,7 +350,8 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
     <section className="api-sidepanel-section">
       <SectionHeading>API Dependency Graph</SectionHeading>
       <p className="api-muted">Nodes = endpoints. Edges = inferred call chains. Node size = call frequency.</p>
-      <svg viewBox={`0 0 ${width} ${height}`} className="api-dependency-graph" role="img" aria-label="API dependency graph">
+      <svg viewBox={`0 0 ${width} ${height}`} className="api-dependency-graph" role="img" aria-label={`API dependency graph with ${nodes.length} endpoints and ${edges.length} inferred dependencies`}>
+        <desc>Directed edges show inferred request chains. Node size represents call frequency and edge color represents average latency.</desc>
         <defs>
           <marker id="api-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
             <path d="M0,0 L8,4 L0,8 Z" fill="var(--api-border-strong)" />
@@ -456,6 +459,7 @@ function rowsToHeaders(rows: { k: string; v: string }[]) {
 }
 
 function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRequest | null }) {
+  const replayRef = useRef<HTMLDivElement>(null)
   const [method, setMethod] = useState(request?.method ?? 'GET')
   const [url, setUrl] = useState(request?.url ?? '')
   const [headers, setHeaders] = useState<{ k: string; v: string }[]>(headersToRows(request?.headers ?? {}))
@@ -500,13 +504,63 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
     result?.responseBody ?? '',
   )
 
+  useEffect(() => {
+    const replay = replayRef.current
+    if (!replay) return
+
+    const firstFocusable = replay.querySelector<HTMLElement>('select, input, textarea, button:not(:disabled)')
+    firstFocusable?.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+
+      const focusable = Array.from(
+        replay.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'),
+      ).filter(element => !element.hasAttribute('hidden') && element.offsetParent !== null)
+
+      if (focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+        return
+      }
+
+      if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    replay.addEventListener('keydown', handleKeyDown)
+    return () => replay.removeEventListener('keydown', handleKeyDown)
+  }, [request?.id])
+
   return (
-    <div className="api-replay">
+    <div
+      className="api-replay"
+      ref={replayRef}
+      role="region"
+      aria-label="Request replay editor"
+    >
       <div className="api-replay-row">
-        <select className="api-replay-select api-replay-method" value={method} onChange={event => setMethod(event.target.value)}>
+        <select
+          className="api-replay-select api-replay-method"
+          value={method}
+          onChange={event => setMethod(event.target.value)}
+          aria-label="Replay HTTP method"
+        >
           {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(item => <option key={item}>{item}</option>)}
         </select>
-        <input className="api-replay-input" value={url} onChange={event => setUrl(event.target.value)} />
+        <input
+          className="api-replay-input"
+          value={url}
+          onChange={event => setUrl(event.target.value)}
+          aria-label="Replay request URL"
+        />
       </div>
 
       <div>
@@ -517,6 +571,7 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
               className="api-replay-input"
               value={header.k}
               placeholder="Key"
+              aria-label={`Header ${index + 1} key`}
               onChange={event => {
                 const next = [...headers]
                 next[index] = { ...next[index], k: event.target.value }
@@ -527,13 +582,14 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
               className="api-replay-input"
               value={header.v}
               placeholder="Value"
+              aria-label={`Header ${index + 1} value`}
               onChange={event => {
                 const next = [...headers]
                 next[index] = { ...next[index], v: event.target.value }
                 setHeaders(next)
               }}
             />
-            <button className="api-sidepanel-plain" onClick={() => setHeaders(headers.filter((_, headerIndex) => headerIndex !== index))}>x</button>
+            <button className="api-sidepanel-plain" aria-label={`Remove header ${index + 1}`} onClick={() => setHeaders(headers.filter((_, headerIndex) => headerIndex !== index))}>x</button>
           </div>
         ))}
         <button className="api-sidepanel-plain" onClick={() => setHeaders([...headers, { k: '', v: '' }])}>+ Add header</button>
@@ -545,11 +601,11 @@ function ReplayTab({ tabId, request }: { tabId: number | null; request: ReplayRe
           <div className="api-line-numbers">
             {lineNumbers.map(number => <div key={number}>{number}</div>)}
           </div>
-          <textarea className="api-replay-textarea" value={body} onChange={event => setBody(event.target.value)} />
+          <textarea className="api-replay-textarea" value={body} onChange={event => setBody(event.target.value)} aria-label="Replay request body" />
         </div>
       </div>
 
-      <button className="api-primary-wide" onClick={send} disabled={sending || !tabId || !url}>
+      <button className="api-primary-wide" onClick={send} disabled={sending || !tabId || !url} aria-busy={sending}>
         {sending && <span className="api-spinner" />}
         {sending ? 'Sending...' : 'Send Request'}
       </button>
@@ -664,6 +720,8 @@ function LatencyChart({ requests }: { requests: RequestEntry[] }) {
     <div className="api-latency-chart">
       <canvas
         ref={ref}
+        role="img"
+        aria-label={`Latency chart for ${requests.length} captured requests`}
         onMouseMove={event => {
           const rect = event.currentTarget.getBoundingClientRect()
           const x = event.clientX - rect.left
@@ -744,7 +802,8 @@ async function exportSessionReport(requests: RequestEntry[]) {
     throw new Error('No requests captured yet.')
   }
 
-  const html = buildSessionReportHtml(requests)
+  const settings = await getSettings()
+  const html = buildSessionReportHtml(requests, settings.largePayloadThresholdKb)
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z')
@@ -781,13 +840,14 @@ function downloadWithAnchor(url: string, filename: string) {
   anchor.remove()
 }
 
-function buildSessionReportHtml(requests: RequestEntry[]) {
+function buildSessionReportHtml(requests: RequestEntry[], largePayloadThresholdKb: number) {
   const generatedAt = new Date()
   const total = requests.length
   const avg = total ? Math.round(requests.reduce((sum, request) => sum + request.duration, 0) / total) : 0
   const errors = requests.filter(request => request.status >= 400).length
   const errorRate = total ? Math.round((errors / total) * 1000) / 10 : 0
   const duplicates = requests.filter(request => request.isDuplicate).length
+  const largePayloads = requests.filter(request => isLargePayload(request, largePayloadThresholdKb)).length
   const slowest = [...requests].sort((a, b) => b.duration - a.duration)[0]
   const aiSuggestions = requests.filter(request => request.aiSuggestion)
   const rows = requests.map(request => `
@@ -799,13 +859,17 @@ function buildSessionReportHtml(requests: RequestEntry[]) {
       <td>${formatBytes(request.requestSize)}</td>
       <td>${formatBytes(request.responseSize)}</td>
       <td>${request.ttfb > 0 ? formatMs(request.ttfb) : '-'}</td>
-      <td>${request.isSlow ? '<span class="badge danger-bg">SLOW</span>' : ''}${request.duplicateCount > 1 ? `<span class="badge warn-bg">DUP x${request.duplicateCount}</span>` : ''}</td>
+      <td><span class="source source-${request.timingSource}">${timingSourceLabel(request.timingSource)}</span></td>
+      <td>${buildFlagBadges(request, largePayloadThresholdKb)}</td>
       <td>${escapeHtml(new Date(request.startTime).toLocaleTimeString())}</td>
     </tr>
     <tr class="details-row">
-      <td colspan="9">
+      <td colspan="10">
         <details>
-          <summary>Payload details</summary>
+          <summary>Payload and timing details</summary>
+          <div class="timing-grid">
+            ${buildTimingCells(request, largePayloadThresholdKb)}
+          </div>
           <div class="payload-grid">
             <div>
               <h3>Request</h3>
@@ -820,6 +884,12 @@ function buildSessionReportHtml(requests: RequestEntry[]) {
               <h3>Response</h3>
               <pre>${escapeHtml(formatJsonLike(request.responseBody))}</pre>
             </div>
+            ${request.aiSuggestion ? `
+              <div>
+                <h3>AI Suggestion</h3>
+                <pre>${escapeHtml(request.aiSuggestion)}</pre>
+              </div>
+            ` : ''}
           </div>
         </details>
       </td>
@@ -945,11 +1015,47 @@ function buildSessionReportHtml(requests: RequestEntry[]) {
     .badge { border: 1px solid var(--border-strong); }
     .warn-bg { background: rgba(201, 167, 77, 0.18); color: var(--warning); }
     .danger-bg { background: rgba(255, 143, 143, 0.14); color: var(--danger); }
+    .source {
+      display: inline-flex;
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .source-cdp { background: rgba(143, 230, 188, 0.12); color: var(--success); }
+    .source-performance { background: rgba(137, 194, 255, 0.12); color: #89c2ff; }
+    .source-proxy { background: rgba(201, 167, 77, 0.16); color: var(--warning); }
     .success { color: var(--success); }
     .warning { color: var(--warning); }
     .danger { color: var(--danger); }
     details summary { cursor: pointer; color: var(--primary); }
     .details-row td { background: #18151d; padding: 8px 12px; }
+    .timing-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+      margin-bottom: 10px;
+    }
+    .timing-cell {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      padding: 8px;
+    }
+    .timing-cell .label {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 10px;
+    }
+    .timing-cell .value {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
     .payload-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -992,6 +1098,7 @@ function buildSessionReportHtml(requests: RequestEntry[]) {
       <div class="card"><div class="label">Average Latency</div><div class="value">${formatMs(avg)}</div></div>
       <div class="card"><div class="label">Error Rate</div><div class="value">${errorRate}%</div></div>
       <div class="card"><div class="label">Duplicate Calls</div><div class="value">${duplicates}</div></div>
+      <div class="card"><div class="label">Large Payloads</div><div class="value">${largePayloads}</div><div class="muted">over ${formatBytes(largePayloadThresholdKb * 1024)}</div></div>
       <div class="card"><div class="label">Slowest Endpoint</div><div class="value" style="font-size: 13px; overflow-wrap: anywhere;">${slowest ? escapeHtml(`${formatMs(slowest.duration)} ${getPath(slowest.url)}`) : '-'}</div></div>
     </section>
 
@@ -1012,6 +1119,7 @@ function buildSessionReportHtml(requests: RequestEntry[]) {
           <th>Req Size</th>
           <th>Resp Size</th>
           <th>TTFB</th>
+          <th>Source</th>
           <th>Flags</th>
           <th>Time</th>
         </tr>
@@ -1035,31 +1143,76 @@ function buildSessionReportHtml(requests: RequestEntry[]) {
 
 function buildLatencySvg(requests: RequestEntry[]) {
   const width = 980
-  const height = 180
-  const padding = 18
+  const height = 240
+  const padding = 34
+  if (requests.length === 0) {
+    return '<div class="muted">No requests were captured in this session.</div>'
+  }
+
   const max = Math.max(...requests.map(request => request.duration), 100)
+  const avg = Math.round(requests.reduce((sum, request) => sum + request.duration, 0) / requests.length)
   const points = requests.map((request, index) => {
     const x = padding + (index / Math.max(1, requests.length - 1)) * (width - padding * 2)
-    const y = height - padding - (request.duration / max) * (height - padding * 2)
+    const y = height - padding - (request.duration / max) * (height - padding * 2 - 18)
     return { x, y, request }
   })
   const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ')
+  const fillPath = points.length > 0
+    ? `${path} L ${points.at(-1)?.x.toFixed(1)} ${height - padding} L ${points[0].x.toFixed(1)} ${height - padding} Z`
+    : ''
+  const avgY = height - padding - (avg / max) * (height - padding * 2 - 18)
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(step => {
+    const value = Math.round(max * step)
+    const y = height - padding - step * (height - padding * 2 - 18)
+
+    return `
+      <line x1="${padding}" y1="${y.toFixed(1)}" x2="${width - padding}" y2="${y.toFixed(1)}" stroke="#403a49" stroke-width="1" opacity="${step === 0 ? '1' : '0.45'}" />
+      <text x="${padding - 8}" y="${(y + 4).toFixed(1)}" fill="#79737f" font-size="10" text-anchor="end">${formatMs(value)}</text>
+    `
+  }).join('')
   const dots = points.map(point => `
-    <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" fill="${point.request.isSlow ? '#ff8f8f' : point.request.status >= 400 ? '#ffd36f' : '#8fe6bc'}">
-      <title>${escapeHtml(`${getPath(point.request.url)} - ${formatMs(point.request.duration)}`)}</title>
+    <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${point.request.isSlow || point.request.status >= 400 ? '5' : '3.5'}" fill="${point.request.isSlow ? '#ff8f8f' : point.request.status >= 400 ? '#ffd36f' : '#8fe6bc'}" stroke="#121015" stroke-width="1.5">
+      <title>${escapeHtml(`${point.request.method} ${getPath(point.request.url)} - ${formatMs(point.request.duration)} - ${timingSourceLabel(point.request.timingSource)}`)}</title>
     </circle>
+  `).join('')
+  const sourceLegend = [
+    ['#8fe6bc', '2xx / fast'],
+    ['#ffd36f', '4xx / warning'],
+    ['#ff8f8f', 'Slow / 5xx'],
+  ].map(([color, label], index) => `
+    <g transform="translate(${width - 300 + index * 100}, 18)">
+      <circle cx="0" cy="0" r="4" fill="${color}" />
+      <text x="9" y="4" fill="#9c96a6" font-size="10">${label}</text>
+    </g>
   `).join('')
 
   return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Latency timeline">
-    <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#403a49" />
+    <defs>
+      <linearGradient id="latency-fill" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0%" stop-color="#cbb8ff" stop-opacity="0.28" />
+        <stop offset="100%" stop-color="#cbb8ff" stop-opacity="0.02" />
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="#18151d" />
+    <text x="${padding}" y="22" fill="#eee8f5" font-size="13" font-weight="800">Latency over session</text>
+    <text x="${padding}" y="39" fill="#79737f" font-size="10">Average ${formatMs(avg)} across ${requests.length} requests</text>
+    ${sourceLegend}
+    ${gridLines}
+    <line x1="${padding}" y1="${avgY.toFixed(1)}" x2="${width - padding}" y2="${avgY.toFixed(1)}" stroke="#ffd36f" stroke-width="1" stroke-dasharray="4 5" opacity="0.75" />
+    <text x="${width - padding}" y="${(avgY - 6).toFixed(1)}" fill="#ffd36f" font-size="10" text-anchor="end">avg ${formatMs(avg)}</text>
+    <path d="${fillPath}" fill="url(#latency-fill)" />
     <path d="${path}" fill="none" stroke="#cbb8ff" stroke-width="2" opacity="0.8" />
     ${dots}
   </svg>`
 }
 
 function buildDependencySvg(requests: RequestEntry[]) {
-  const paths = Array.from(new Set(requests.map(request => getPath(request.url))))
   const requestById = new Map(requests.map(request => [request.id, request]))
+  const countByPath = new Map<string, number>()
+  requests.forEach(request => {
+    const path = getPath(request.url)
+    countByPath.set(path, (countByPath.get(path) ?? 0) + 1)
+  })
   const edgeMap = new Map<string, { from: string; to: string; latency: number; count: number }>()
 
   requests.forEach(request => {
@@ -1069,7 +1222,7 @@ function buildDependencySvg(requests: RequestEntry[]) {
       if (!source) return
 
       const from = getPath(source.url)
-      if (!paths.includes(from) || !paths.includes(to) || from === to) return
+      if (from === to) return
 
       const key = `${from} -> ${to}`
       const edge = edgeMap.get(key) ?? { from, to, latency: 0, count: 0 }
@@ -1081,46 +1234,74 @@ function buildDependencySvg(requests: RequestEntry[]) {
 
   const edges = Array.from(edgeMap.values())
     .map(edge => ({ ...edge, latency: Math.round(edge.latency / edge.count) }))
+    .sort((a, b) => b.count - a.count || b.latency - a.latency)
 
-  if (paths.length < 2 || edges.length === 0) {
+  if (edges.length === 0) {
     return '<div class="muted">No inferred dependencies were captured in this session.</div>'
   }
 
+  const paths = Array.from(new Set(edges.flatMap(edge => [edge.from, edge.to])))
   const width = 980
-  const height = 360
+  const height = 430
   const centerX = width / 2
-  const centerY = height / 2
-  const radius = 135
+  const centerY = height / 2 + 8
+  const radius = Math.min(165, 62 + paths.length * 15)
   const positions = new Map(paths.map((path, index) => {
-    const angle = (index / paths.length) * Math.PI * 2
+    const angle = (index / paths.length) * Math.PI * 2 - Math.PI / 2
     return [path, {
       x: centerX + Math.cos(angle) * radius,
       y: centerY + Math.sin(angle) * radius,
     }]
   }))
-  const counts = new Map<string, number>()
-  requests.forEach(request => counts.set(getPath(request.url), (counts.get(getPath(request.url)) ?? 0) + 1))
   const lines = edges.map(edge => {
     const start = positions.get(edge.from)
     const end = positions.get(edge.to)
     if (!start || !end) return ''
-    return `<line x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke="${latencyColor(edge.latency)}" stroke-width="1.5" />`
+    const midX = (start.x + end.x) / 2
+    const midY = (start.y + end.y) / 2
+    const curveX = centerX + (midX - centerX) * 0.25
+    const curveY = centerY + (midY - centerY) * 0.25
+
+    return `<g>
+      <path d="M ${start.x.toFixed(1)} ${start.y.toFixed(1)} Q ${curveX.toFixed(1)} ${curveY.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}" fill="none" stroke="${latencyColor(edge.latency)}" stroke-width="${Math.min(4, 1.2 + edge.count * 0.5).toFixed(1)}" marker-end="url(#report-arrow)" opacity="0.88">
+        <title>${escapeHtml(`${getEndpointLabel(edge.from)} -> ${getEndpointLabel(edge.to)} - ${edge.count} call chain(s), avg ${formatMs(edge.latency)}`)}</title>
+      </path>
+      <text x="${midX.toFixed(1)}" y="${(midY - 5).toFixed(1)}" fill="#9c96a6" font-size="9" text-anchor="middle">${formatMs(edge.latency)}</text>
+    </g>`
   }).join('')
   const nodes = paths.map(path => {
     const position = positions.get(path)!
-    const count = counts.get(path) ?? 1
+    const count = countByPath.get(path) ?? 1
     const nodeRadius = Math.min(20, 8 + count * 1.5)
     return `<g>
+      <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius + 7}" fill="rgba(203, 184, 255, 0.07)" />
       <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius}" fill="#292630" stroke="#cbb8ff" stroke-width="1.5">
-        <title>${escapeHtml(path)}</title>
+        <title>${escapeHtml(`${path} - ${count} captured call(s)`)}</title>
       </circle>
       <circle cx="${(position.x + nodeRadius - 2).toFixed(1)}" cy="${(position.y - nodeRadius + 2).toFixed(1)}" r="8" fill="#8069bf" stroke="#121015" stroke-width="1.5" />
       <text x="${(position.x + nodeRadius - 2).toFixed(1)}" y="${(position.y - nodeRadius + 5).toFixed(1)}" fill="#eee8f5" font-size="8" font-weight="800" text-anchor="middle">${count}</text>
-      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 14).toFixed(1)}" fill="#9c96a6" font-size="10" text-anchor="middle">${escapeHtml(trimMiddle(path, 26))}</text>
+      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 16).toFixed(1)}" fill="#eee8f5" font-size="10" font-weight="700" text-anchor="middle">${escapeHtml(trimMiddle(getEndpointLabel(path), 26))}</text>
+      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 29).toFixed(1)}" fill="#79737f" font-size="9" text-anchor="middle">${escapeHtml(trimMiddle(path, 34))}</text>
     </g>`
   }).join('')
 
-  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Dependency map">${lines}${nodes}</svg>`
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Dependency map">
+    <defs>
+      <marker id="report-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 Z" fill="#9c96a6" />
+      </marker>
+    </defs>
+    <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="#18151d" />
+    <text x="18" y="24" fill="#eee8f5" font-size="13" font-weight="800">Inferred API dependencies</text>
+    <text x="18" y="41" fill="#79737f" font-size="10">Node size shows captured call frequency. Edge labels show downstream average latency.</text>
+    <g transform="translate(${width - 380}, 26)" font-size="10" fill="#9c96a6">
+      <line x1="0" y1="0" x2="22" y2="0" stroke="#22C55E" stroke-width="2" /><text x="30" y="4">Fast</text>
+      <line x1="86" y1="0" x2="108" y2="0" stroke="#F59E0B" stroke-width="2" /><text x="116" y="4">500ms+</text>
+      <line x1="200" y1="0" x2="222" y2="0" stroke="#EF4444" stroke-width="2" /><text x="230" y="4">1.5s+</text>
+    </g>
+    ${lines}
+    ${nodes}
+  </svg>`
 }
 
 function formatJsonLike(value: unknown) {
@@ -1134,6 +1315,47 @@ function formatJsonLike(value: unknown) {
   }
 
   return JSON.stringify(value, null, 2)
+}
+
+function timingSourceLabel(source: RequestEntry['timingSource']) {
+  if (source === 'cdp') return 'CDP'
+  if (source === 'performance') return 'Browser'
+  return 'Proxy'
+}
+
+function isLargePayload(request: RequestEntry, largePayloadThresholdKb: number) {
+  return request.responseSize > largePayloadThresholdKb * 1024
+}
+
+function buildFlagBadges(request: RequestEntry, largePayloadThresholdKb: number) {
+  return [
+    request.isSlow ? '<span class="badge danger-bg">SLOW</span>' : '',
+    request.duplicateCount > 1 ? `<span class="badge warn-bg">DUP x${request.duplicateCount}</span>` : '',
+    isLargePayload(request, largePayloadThresholdKb) ? `<span class="badge warn-bg">LARGE ${escapeHtml(formatBytes(request.responseSize))}</span>` : '',
+  ].filter(Boolean).join('')
+}
+
+function buildTimingCells(request: RequestEntry, largePayloadThresholdKb: number) {
+  const cells = [
+    ['Source', timingSourceLabel(request.timingSource)],
+    ['Duration', formatMs(request.duration)],
+    ['TTFB', request.ttfb > 0 ? formatMs(request.ttfb) : '-'],
+    ['DNS', request.dnsTime > 0 ? formatMs(request.dnsTime) : '-'],
+    ['Connect', request.connectTime > 0 ? formatMs(request.connectTime) : '-'],
+    ['SSL', request.sslTime > 0 ? formatMs(request.sslTime) : '-'],
+    ['Request', request.requestTime > 0 ? formatMs(request.requestTime) : '-'],
+    ['Response', request.responseTime > 0 ? formatMs(request.responseTime) : '-'],
+    ['Transfer', formatBytes(request.transferSize)],
+    ['Decoded', formatBytes(request.decodedBodySize)],
+    ['Payload Limit', formatBytes(largePayloadThresholdKb * 1024)],
+  ]
+
+  return cells.map(([label, value]) => `
+    <div class="timing-cell">
+      <span class="label">${escapeHtml(label)}</span>
+      <div class="value">${escapeHtml(value)}</div>
+    </div>
+  `).join('')
 }
 
 function escapeHtml(value: unknown) {

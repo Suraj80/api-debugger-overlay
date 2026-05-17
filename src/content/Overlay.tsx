@@ -322,6 +322,20 @@ const overlayThemeCss = `
     background: var(--api-surface);
   }
 
+  .apidbg-row:focus-visible,
+  .apidbg-tab:focus-visible,
+  .apidbg-search:focus-visible,
+  .apidbg-plain-button:focus-visible,
+  .apidbg-primary-button:focus-visible,
+  .apidbg-secondary-button:focus-visible,
+  .apidbg-minimised:focus-visible,
+  .apidbg-link-button:focus-visible,
+  .apidbg-json-row:focus-visible,
+  .apidbg-json-copy:focus-visible {
+    outline: 2px solid var(--api-color-primary-soft);
+    outline-offset: 2px;
+  }
+
   .apidbg-path {
     flex: 1;
     min-width: 0;
@@ -432,6 +446,89 @@ const overlayThemeCss = `
   .apidbg-json-meta {
     color: var(--api-text-subtle);
     font-size: 11px;
+  }
+
+  .apidbg-json-row {
+    display: flex;
+    min-height: 20px;
+    align-items: center;
+    gap: 5px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  .apidbg-json-row:hover {
+    background: rgba(203, 184, 255, 0.06);
+  }
+
+  .apidbg-json-key {
+    color: var(--api-color-primary-soft);
+  }
+
+  .apidbg-json-key.is-match {
+    border-radius: 2px;
+    background: rgba(201, 167, 77, 0.18);
+    color: var(--api-warning);
+    padding: 0 2px;
+  }
+
+  .apidbg-json-punct,
+  .apidbg-json-preview,
+  .apidbg-json-path {
+    color: var(--api-text-subtle);
+  }
+
+  .apidbg-json-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .apidbg-json-value-string {
+    color: var(--api-success);
+  }
+
+  .apidbg-json-value-number {
+    color: #89c2ff;
+  }
+
+  .apidbg-json-value-boolean {
+    color: var(--api-warning);
+  }
+
+  .apidbg-json-value-null,
+  .apidbg-json-value-undefined {
+    color: var(--api-text-subtle);
+    font-style: italic;
+  }
+
+  .apidbg-json-copy {
+    flex-shrink: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--api-text-subtle);
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    opacity: 0;
+    padding: 3px 5px;
+  }
+
+  .apidbg-json-row:hover .apidbg-json-copy,
+  .apidbg-json-copy:focus-visible,
+  .apidbg-json-copy.is-copied {
+    opacity: 1;
+  }
+
+  .apidbg-json-copy:hover,
+  .apidbg-json-copy.is-copied {
+    background: var(--api-surface-raised);
+    color: var(--api-color-primary-soft);
   }
 
   .apidbg-detail-actions {
@@ -648,6 +745,17 @@ const overlayThemeCss = `
     background: var(--api-border-strong);
     border-radius: 99px;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
 `
 
 function LiveDot({ isCapturing }: { isCapturing: boolean }) {
@@ -815,6 +923,22 @@ function SlowBadge() {
   )
 }
 
+function LargePayloadBadge({ size }: { size: number }) {
+  return (
+    <span
+      className="apidbg-badge"
+      style={{
+        '--badge-bg': 'rgba(201, 167, 77, 0.18)',
+        '--badge-border': 'rgba(201, 167, 77, 0.45)',
+        '--badge-color': 'var(--api-warning)',
+      } as React.CSSProperties}
+      title={`Large response payload: ${formatBytes(size)}`}
+    >
+      LARGE
+    </span>
+  )
+}
+
 function SpinnerIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className="apidbg-spinner">
@@ -828,26 +952,76 @@ function Chip({ label, color }: { label: string; color: string }) {
   return <span className="apidbg-chip" style={{ '--chip-color': color } as React.CSSProperties}>{label}</span>
 }
 
+function escapeJsonPathKey(key: string) {
+  return key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+function appendJsonPath(parentPath: string, key: string, parentIsArray: boolean) {
+  if (parentIsArray) return `${parentPath}[${key}]`
+  if (/^[A-Za-z_$][\w$]*$/.test(key)) return `${parentPath}.${key}`
+  return `${parentPath}["${escapeJsonPathKey(key)}"]`
+}
+
+function stringifyJsonValue(value: unknown) {
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value === null) return 'null'
+  if (value === undefined) return 'undefined'
+
+  return JSON.stringify(value, null, 2)
+}
+
+function JsonPathCopyButton({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false)
+
+  return (
+    <button
+      className={`apidbg-json-copy${copied ? ' is-copied' : ''}`}
+      title={`Copy path: ${path}`}
+      aria-label={`Copy JSON path ${path}`}
+      onClick={event => {
+        event.stopPropagation()
+        navigator.clipboard?.writeText(path)
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1200)
+      }}
+    >
+      {copied ? 'Copied' : 'Path'}
+    </button>
+  )
+}
+
 function JsonNode({
   k,
   value,
   depth,
   search,
   forceExpand,
+  path,
 }: {
   k?: string
   value: unknown
   depth: number
   search: string
   forceExpand: JsonExpandMode
+  path: string
 }) {
   const [open, setOpen] = useState(depth < 2)
   const isOpen = forceExpand === 'all' ? true : forceExpand === 'none' ? false : open
 
   const isObj = value && typeof value === 'object' && !Array.isArray(value)
   const isArr = Array.isArray(value)
-  const matches = Boolean(search && k && k.toLowerCase().includes(search.toLowerCase()))
-  const dim = search && !matches && k ? 0.3 : 1
+  const valueText = stringifyJsonValue(value)
+  const normalizedSearch = search.trim().toLowerCase()
+  const matches = Boolean(
+    normalizedSearch &&
+    (
+      k?.toLowerCase().includes(normalizedSearch) ||
+      path.toLowerCase().includes(normalizedSearch) ||
+      (typeof valueText === 'string' && valueText.toLowerCase().includes(normalizedSearch))
+    ),
+  )
+  const dim = normalizedSearch && !matches ? 0.35 : 1
   const indent = depth * 16
 
   if (isObj || isArr) {
@@ -860,29 +1034,58 @@ function JsonNode({
     return (
       <div style={{ opacity: dim, paddingLeft: depth === 0 ? 0 : 12, borderLeft: depth === 0 ? 'none' : '1px solid var(--api-border)' }}>
         <div
+          className="apidbg-json-row"
+          role="treeitem"
+          tabIndex={0}
+          aria-expanded={isOpen}
+          aria-label={`${path}, ${isArr ? 'array' : 'object'}, ${count} ${isArr ? 'items' : 'keys'}`}
           onClick={() => setOpen(o => !o)}
-          style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, paddingLeft: indent }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              setOpen(o => !o)
+            }
+            if (event.key === 'ArrowRight' && !isOpen) {
+              event.preventDefault()
+              setOpen(true)
+            }
+            if (event.key === 'ArrowLeft' && isOpen) {
+              event.preventDefault()
+              setOpen(false)
+            }
+          }}
+          style={{ cursor: 'pointer', paddingLeft: indent }}
         >
           <span style={{ display: 'inline-block', width: 10, color: 'var(--api-text-subtle)', transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 10 }}>
             {'>'}
           </span>
           {k !== undefined && (
-            <span style={{ color: matches ? 'var(--api-warning)' : 'var(--api-color-primary-soft)', background: matches ? 'rgba(201, 167, 77, 0.18)' : undefined, fontFamily: 'ui-monospace, monospace', fontSize: 12, padding: matches ? '0 2px' : 0, borderRadius: matches ? 2 : 0 }}>
+            <span className={`apidbg-json-key${matches ? ' is-match' : ''}`}>
               "{k}"
             </span>
           )}
-          {k !== undefined && <span style={{ color: 'var(--api-text-subtle)' }}>:</span>}
+          {k !== undefined && <span className="apidbg-json-punct">:</span>}
           {!isOpen && (
-            <span style={{ color: 'var(--api-text-subtle)', fontSize: 12 }}>
+            <span className="apidbg-json-preview">
               {isArr ? `[...] ${count} items` : `{...} ${count} keys`}
             </span>
           )}
-          {isOpen && <span style={{ color: 'var(--api-text-subtle)' }}>{isArr ? '[' : '{'}</span>}
+          {isOpen && <span className="apidbg-json-punct">{isArr ? '[' : '{'}</span>}
+          <span className="apidbg-json-path" title={path}>{path}</span>
+          <JsonPathCopyButton path={path} />
         </div>
         {isOpen && (
-          <div>
+          <div role="group">
             {entries.map(([ck, cv]) => (
-              <JsonNode key={ck} k={ck} value={cv} depth={depth + 1} search={search} forceExpand={forceExpand} />
+              <JsonNode
+                key={ck}
+                k={ck}
+                value={cv}
+                depth={depth + 1}
+                search={search}
+                forceExpand={forceExpand}
+                path={appendJsonPath(path, ck, isArr)}
+              />
             ))}
             <div style={{ paddingLeft: indent + 14, color: 'var(--api-text-subtle)', fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>
               {isArr ? ']' : '}'}
@@ -893,36 +1096,28 @@ function JsonNode({
     )
   }
 
-  let valStr = ''
-  let valColor = 'var(--api-text)'
-  let italic = false
-
-  if (typeof value === 'string') {
-    valStr = `"${value}"`
-    valColor = 'var(--api-success)'
-  } else if (typeof value === 'number') {
-    valStr = String(value)
-    valColor = 'var(--api-warning)'
-  } else if (typeof value === 'boolean') {
-    valStr = String(value)
-    valColor = 'var(--api-color-primary-soft)'
-  } else if (value === null) {
-    valStr = 'null'
-    valColor = 'var(--api-text-subtle)'
-    italic = true
-  }
+  const valueType = value === null ? 'null' : typeof value
+  const valueClass = `apidbg-json-value-${valueType}`
 
   return (
-    <div style={{ opacity: dim, paddingLeft: indent + 14, fontFamily: 'ui-monospace, monospace', fontSize: 12, display: 'flex', gap: 6 }}>
+    <div
+      className="apidbg-json-row"
+      role="treeitem"
+      tabIndex={0}
+      aria-label={`${path}, ${valueType}, ${valueText}`}
+      style={{ opacity: dim, paddingLeft: indent + 14 }}
+    >
       {k !== undefined && (
         <>
-          <span style={{ color: matches ? 'var(--api-warning)' : 'var(--api-color-primary-soft)', background: matches ? 'rgba(201, 167, 77, 0.18)' : undefined, padding: matches ? '0 2px' : 0, borderRadius: matches ? 2 : 0 }}>
+          <span className={`apidbg-json-key${matches ? ' is-match' : ''}`}>
             "{k}"
           </span>
-          <span style={{ color: 'var(--api-text-subtle)' }}>:</span>
+          <span className="apidbg-json-punct">:</span>
         </>
       )}
-      <span style={{ color: valColor, fontStyle: italic ? 'italic' : 'normal' }}>{valStr}</span>
+      <span className={valueClass}>{valueText}</span>
+      <span className="apidbg-json-path" title={path}>{path}</span>
+      <JsonPathCopyButton path={path} />
     </div>
   )
 }
@@ -1099,6 +1294,7 @@ function AICard({
 }
 
 function RequestRow({ req }: { req: RequestEntry }) {
+  const settings = useSettings()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<JsonTab>('response')
   const [search, setSearch] = useState('')
@@ -1122,6 +1318,7 @@ function RequestRow({ req }: { req: RequestEntry }) {
   }), [req])
 
   const jsonValue = tab === 'response' ? parsedBody ?? { body: null } : requestObj
+  const isLargePayload = req.responseSize > settings.largePayloadThresholdKb * 1024
 
   const triggerAI = async () => {
     setAiState('loading')
@@ -1131,6 +1328,7 @@ function RequestRow({ req }: { req: RequestEntry }) {
       const response = await sendRuntimeMessage({
         type: 'ASK_AI_SUGGESTION',
         payload: {
+          id: req.id,
           method: req.method,
           url: req.url,
           status: req.status,
@@ -1158,7 +1356,20 @@ function RequestRow({ req }: { req: RequestEntry }) {
 
   return (
     <div className={`apidbg-row-wrap${req.duplicateCount > 1 ? ' has-duplicates' : ''}`}>
-      <div className="apidbg-row" onClick={() => setOpen(o => !o)}>
+      <div
+        className="apidbg-row"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`${req.method} ${path}, status ${req.status || 'unknown'}, ${Math.round(req.duration)} milliseconds`}
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            setOpen(o => !o)
+          }
+        }}
+      >
         <MethodBadge method={req.method} />
         <span className="apidbg-path" title={req.url}>{path}</span>
         <StatusBadge status={req.status} />
@@ -1166,6 +1377,7 @@ function RequestRow({ req }: { req: RequestEntry }) {
         <Duration ms={req.duration} />
         {req.duplicateCount > 1 && <DupBadge count={req.duplicateCount} />}
         {req.isSlow && <SlowBadge />}
+        {isLargePayload && <LargePayloadBadge size={req.responseSize} />}
         <svg
           className={`apidbg-chevron${open ? ' is-open' : ''}`}
           width="12"
@@ -1227,6 +1439,12 @@ function RequestRow({ req }: { req: RequestEntry }) {
               <div className="apidbg-meta-label">Response</div>
               <div className="apidbg-meta-value">{formatBytes(req.responseSize)}</div>
             </div>
+            {isLargePayload && (
+              <div className="apidbg-meta-cell">
+                <div className="apidbg-meta-label">Payload Limit</div>
+                <div className="apidbg-meta-value">{formatBytes(settings.largePayloadThresholdKb * 1024)}</div>
+              </div>
+            )}
             <div className="apidbg-meta-cell">
               <div className="apidbg-meta-label">Timing</div>
               <div className="apidbg-meta-value">{req.timingSource === 'cdp' ? 'CDP' : req.timingSource === 'performance' ? 'Browser' : 'Proxy'}</div>
@@ -1239,8 +1457,18 @@ function RequestRow({ req }: { req: RequestEntry }) {
             )}
           </div>
 
-          <div className="apidbg-json-box apidbg-scroll">
-            <JsonNode value={jsonValue} depth={0} search={search} forceExpand={forceExpand} />
+          <div
+            className="apidbg-json-box apidbg-scroll"
+            role="tree"
+            aria-label={`${tab === 'response' ? 'Response' : 'Request'} JSON tree`}
+          >
+            <JsonNode
+              value={jsonValue}
+              depth={0}
+              search={search}
+              forceExpand={forceExpand}
+              path={tab}
+            />
           </div>
 
           <div className="apidbg-json-footer">
