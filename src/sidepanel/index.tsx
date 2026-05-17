@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
@@ -94,6 +95,9 @@ export function SidePanel() {
 
         setSessionTabId(currentTabId => currentTabId ?? snapshot.tabId)
         setReplayTarget(snapshot.request)
+        if (snapshot.request) {
+          setTab('replay')
+        }
       }).catch(() => {
         if (!cancelled) setReplayTarget(null)
       })
@@ -785,7 +789,7 @@ function DiffPanel({ title, lines }: { title: string; lines: DiffLine[] }) {
   )
 }
 
-function computeDiff(a: string, b: string): { left: DiffLine[]; right: DiffLine[] } {
+export function computeDiff(a: string, b: string): { left: DiffLine[]; right: DiffLine[] } {
   const leftLines = a.split('\n')
   const rightLines = b.split('\n')
   const leftSet = new Set(leftLines)
@@ -797,7 +801,7 @@ function computeDiff(a: string, b: string): { left: DiffLine[]; right: DiffLine[
   }
 }
 
-async function exportSessionReport(requests: RequestEntry[]) {
+export async function exportSessionReport(requests: RequestEntry[]) {
   if (requests.length === 0) {
     throw new Error('No requests captured yet.')
   }
@@ -840,7 +844,7 @@ function downloadWithAnchor(url: string, filename: string) {
   anchor.remove()
 }
 
-function buildSessionReportHtml(requests: RequestEntry[], largePayloadThresholdKb: number) {
+export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThresholdKb: number) {
   const generatedAt = new Date()
   const total = requests.length
   const avg = total ? Math.round(requests.reduce((sum, request) => sum + request.duration, 0) / total) : 0
@@ -1206,7 +1210,7 @@ function buildLatencySvg(requests: RequestEntry[]) {
   </svg>`
 }
 
-function buildDependencySvg(requests: RequestEntry[]) {
+export function buildDependencySvg(requests: RequestEntry[]) {
   const requestById = new Map(requests.map(request => [request.id, request]))
   const countByPath = new Map<string, number>()
   requests.forEach(request => {
@@ -1405,7 +1409,11 @@ function latencyColor(ms: number) {
   return '#EF4444'
 }
 
-const rootElement = document.getElementById('root')!
-const root = window.__apiDebuggerSidePanelRoot ?? createRoot(rootElement)
-window.__apiDebuggerSidePanelRoot = root
-root.render(<SidePanel />)
+if (typeof document !== 'undefined') {
+  const rootElement = document.getElementById('root')
+  if (rootElement) {
+    const root = window.__apiDebuggerSidePanelRoot ?? createRoot(rootElement)
+    window.__apiDebuggerSidePanelRoot = root
+    root.render(<SidePanel />)
+  }
+}

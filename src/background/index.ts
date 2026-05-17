@@ -402,7 +402,7 @@ async function setPreciseMode(enabled: boolean) {
   }
 }
 
-function sanitizeUrlForAi(url: string) {
+export function sanitizeUrlForAi(url: string) {
   try {
     const parsedUrl = new URL(url)
     parsedUrl.hash = ''
@@ -611,7 +611,7 @@ function rememberRequest(tabId: number, request: RequestEntry) {
   }
 }
 
-function inferDependencies(
+export function inferDependencies(
   newRequest: RequestEntry,
   existingRequests: RequestEntry[],
 ): string[] {
@@ -656,7 +656,7 @@ function inferDependencies(
   return dependsOn
 }
 
-function extractLeafValues(obj: unknown, depth = 0): string[] {
+export function extractLeafValues(obj: unknown, depth = 0): string[] {
   if (depth > 6) return []
   if (typeof obj === 'string' || typeof obj === 'number') {
     return [String(obj)]
@@ -723,8 +723,22 @@ async function getActiveTabId(): Promise<number | null> {
   return tab?.id ?? null
 }
 
+function pickTrackedTabId(preferredTabId: number | null | undefined, candidates: Iterable<number>) {
+  if (preferredTabId != null) {
+    for (const candidate of candidates) {
+      if (candidate === preferredTabId) {
+        return preferredTabId
+      }
+    }
+  }
+
+  const uniqueCandidates = Array.from(new Set(candidates))
+  return uniqueCandidates.length === 1 ? uniqueCandidates[0] : preferredTabId ?? null
+}
+
 async function getSessionSnapshot(tabId?: number): Promise<SessionSnapshot> {
-  const resolvedTabId = tabId ?? await getActiveTabId()
+  const activeTabId = tabId ?? await getActiveTabId()
+  const resolvedTabId = pickTrackedTabId(activeTabId, sessionsByTab.keys())
 
   return {
     tabId: resolvedTabId,
@@ -733,7 +747,8 @@ async function getSessionSnapshot(tabId?: number): Promise<SessionSnapshot> {
 }
 
 async function getReplayTargetSnapshot(tabId?: number): Promise<ReplayTargetSnapshot> {
-  const resolvedTabId = tabId ?? await getActiveTabId()
+  const activeTabId = tabId ?? await getActiveTabId()
+  const resolvedTabId = pickTrackedTabId(activeTabId, replayTargetsByTab.keys())
 
   return {
     tabId: resolvedTabId,

@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http'
 const extensionPath = resolve('dist')
 
 async function startTestServer() {
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
 
     if (url.pathname === '/') {
@@ -19,6 +19,8 @@ async function startTestServer() {
             <button id="fetch-users">Fetch users twice</button>
             <button id="xhr-profile">XHR profile</button>
             <button id="large-payload">Large payload</button>
+            <button id="dependency-chain">Dependency chain</button>
+            <button id="slow-request">Slow request</button>
             <script>
               document.querySelector('#fetch-users').addEventListener('click', async () => {
                 await fetch('/api/users?b=2&a=1')
@@ -32,6 +34,17 @@ async function startTestServer() {
               })
               document.querySelector('#large-payload').addEventListener('click', () => {
                 fetch('/api/large')
+              })
+              document.querySelector('#dependency-chain').addEventListener('click', async () => {
+                const seed = await fetch('/api/seed').then(res => res.json())
+                await fetch('/api/projects/' + seed.projectId + '/details', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ projectId: seed.projectId }),
+                })
+              })
+              document.querySelector('#slow-request').addEventListener('click', () => {
+                fetch('/api/slow')
               })
             </script>
           </body>
@@ -50,8 +63,44 @@ async function startTestServer() {
     }
 
     if (url.pathname === '/api/profile') {
-      const body = JSON.stringify({ ok: true, profileId: 42 })
+      const chunks: Buffer[] = []
+      for await (const chunk of req) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      }
+      const payload = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}
+      const body = JSON.stringify({ ok: true, profileId: payload.id ?? 42 })
       res.writeHead(201, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/seed') {
+      const body = JSON.stringify({ projectId: 'proj_abc123' })
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/projects/proj_abc123/details') {
+      const body = JSON.stringify({ ok: true, detailsFor: 'proj_abc123' })
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/slow') {
+      await new Promise(resolveDelay => setTimeout(resolveDelay, 1700))
+      const body = JSON.stringify({ ok: true, slow: true })
+      res.writeHead(200, {
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(body),
       })
@@ -157,5 +206,39 @@ test.describe('API Debugger extension', () => {
 
     await expect(overlay(page).locator('[role="tree"]')).toBeVisible()
     await expect(overlay(page).locator('.apidbg-json-copy', { hasText: 'Path' }).first()).toBeVisible()
+  })
+
+  test('shows replay controls and captured request payloads for mutation requests', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    await page.locator('#xhr-profile').click()
+
+    const profileRow = overlay(page).locator('.apidbg-row', { hasText: '/api/profile' }).first()
+    await profileRow.press('Enter')
+    await overlay(page).getByRole('button', { name: 'request' }).click()
+
+    await expect(overlay(page).getByRole('tree', { name: 'Request JSON tree' })).toBeVisible()
+    await expect(overlay(page)).toContainText('content-type')
+    await expect(overlay(page)).toContainText('application/json')
+    await expect(overlay(page)).toContainText('42')
+    await expect(overlay(page).getByRole('button', { name: 'Replay' })).toBeVisible()
+  })
+
+  test('captures chained requests and exposes slow-request actions in the overlay', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    await page.locator('#dependency-chain').click()
+    await page.locator('#slow-request').click()
+
+    await expect(overlay(page)).toContainText('/api/seed')
+    await expect(overlay(page)).toContainText('/api/projects/proj_abc123/details')
+    await expect(overlay(page)).toContainText('/api/slow')
+    await expect(overlay(page)).toContainText('SLOW')
+
+    const slowRow = overlay(page).locator('.apidbg-row', { hasText: '/api/slow' }).first()
+    await slowRow.press('Enter')
+    await expect(overlay(page).getByRole('button', { name: 'Ask AI' })).toBeVisible()
   })
 })
