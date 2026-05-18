@@ -88,6 +88,8 @@ export type ExtensionMessage =
   | { type: 'REQUEST_COMPLETE'; payload: RequestEntry }
   | { type: 'REQUEST_UPDATED'; payload: RequestEntry }
   | { type: 'TIMING_UPDATE'; payload: TimingUpdatePayload }
+  | { type: 'GET_OVERLAY_STATE'; tabId?: number }
+  | { type: 'SET_OVERLAY_PAUSED'; payload: { paused: boolean } }
   | { type: 'SET_PRECISE_MODE'; payload: { enabled: boolean } }
   | { type: 'ASK_AI_SUGGESTION'; payload: AISuggestionRequest }
   | { type: 'TEST_AI_CONNECTION' }
@@ -105,10 +107,16 @@ export type ExtensionMessage =
 
 export interface SessionSnapshot {
   tabId: number | null
+  tabLabel?: string | null
   requests: RequestEntry[]
 }
 
 export interface ReplayTargetSnapshot {
   tabId: number | null
   request: ReplayRequest | null
+}
+
+export interface OverlayStateSnapshot {
+  tabId: number | null
+  paused: boolean
 }

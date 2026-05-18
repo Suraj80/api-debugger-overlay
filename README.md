@@ -4,7 +4,7 @@ API Debugger Overlay is a Chrome Manifest V3 extension that captures `fetch` and
 
 ## Current Status
 
-The project has the core extension scaffold and several PRD features implemented:
+The project has the core extension scaffold and the major PRD feature set implemented:
 
 - MV3 Chrome extension setup with content script, injected page script, background service worker, popup, and side panel.
 - Real-time request feed for `fetch` and XHR calls.
@@ -12,18 +12,18 @@ The project has the core extension scaffold and several PRD features implemented
 - Duplicate request detection using FNV-1a fingerprinting over normalized method, URL, and body.
 - Configurable capture settings, latency threshold, payload threshold, overlay position, and API key field from the popup.
 - In-page overlay with live session metrics, status badges, slow request badges, duplicate badges, and a Canvas latency sparkline.
-- Lazy JSON response viewer with tree expansion, search, copy JSON, and basic AI suggestion UI.
+- Lazy JSON request/response viewer with tree expansion, search, copy JSON, JSON path copy, and AI suggestion UI.
 - Side panel with session dashboard, latency chart, dependency graph view, and request replay view.
 - Request replay routed back through the original tab context so cookies/session state are preserved.
 - AI suggestion requests routed through the background service worker with sanitization and rate limiting.
 - Anthropic API key stored encrypted in `chrome.storage.local`, with migration from earlier plaintext storage.
-- Focused Vitest unit coverage for encrypted settings storage and AI prompt sanitization.
+- Vitest and Playwright coverage for settings encryption, AI prompt sanitization, session handling, export helpers, and core extension flows.
 
-Still pending from the PRD:
+Remaining work is mostly release polish:
 
-- Broader automated coverage for request interception, session metrics, replay, export, and E2E extension flows.
-- Per-node JSON path copy.
-- CI/CD workflow and Chrome Web Store packaging polish.
+- Broader edge-case coverage and regression hardening.
+- Chrome Web Store asset preparation such as final screenshots/icons for the store dashboard.
+- Ongoing documentation and release-note maintenance as features evolve.
 
 ## Project Structure
 
@@ -90,6 +90,23 @@ The unit suite uses Vitest. The E2E suite uses Playwright to load the built exte
 5. Select the generated `dist` directory.
 6. Open a website that performs API calls and activate the extension.
 
+## Packaging For Release
+
+Build and package a Chrome Web Store upload artifact:
+
+```bash
+pnpm build
+pnpm package:extension
+```
+
+This creates a versioned ZIP archive in `release/`.
+
+Release docs:
+
+- [Chrome Web Store release guide](docs/chrome-web-store-release.md)
+- [Chrome Web Store listing copy](docs/chrome-web-store-listing.md)
+- [Privacy policy](docs/privacy-policy.md)
+
 ## How It Works
 
 The content script runs at `document_start` and injects `src/injected/index.js` into the page context. The injected script wraps `window.fetch` and `XMLHttpRequest` methods, captures completed request details, and sends those details back through `window.postMessage`.
@@ -108,14 +125,14 @@ No request data is sent to external services unless the user explicitly clicks `
 
 ## PRD Alignment
 
-The implementation is currently closest to phases 1-3 of the PRD, with partial phase 4 work:
+The implementation is functionally beyond the early PRD phases and includes the major planned product surfaces:
 
 - Phase 1: scaffold, injection, fetch/XHR interception, bridge, and basic overlay are implemented.
-- Phase 2: duplicate detection, latency alerts, payload sizing, and JSON viewer are partially to mostly implemented.
+- Phase 2: duplicate detection, latency alerts, payload sizing, and JSON inspection are implemented.
 - Phase 3: session metrics, Canvas chart, and popup settings are implemented. Regular settings now use sync storage; the API key remains local.
 - Phase 4: side panel, replay flow, dependency graph rendering, and heuristic dependency inference are implemented.
 - Phase 5: AI integration and HTML export are implemented.
-- Phase 6: focused unit tests exist; broader test coverage, polish, CI/CD, and release materials are pending.
+- Phase 6: CI is in place and focused unit/E2E coverage exists. Remaining work is mostly polish, broader edge-case testing, and store asset readiness.
 
 ## Scripts
 
@@ -123,6 +140,7 @@ The implementation is currently closest to phases 1-3 of the PRD, with partial p
 |---|---|
 | `pnpm dev` | Start Vite development server |
 | `pnpm build` | Build the Chrome extension into `dist` |
+| `pnpm package:extension` | Create a versioned Chrome Web Store ZIP from `dist` |
 | `pnpm preview` | Preview the Vite build |
 | `pnpm lint` | Run ESLint over `src` |
 | `pnpm test` | Run Vitest unit tests in `tests/unit` |

@@ -14,17 +14,18 @@ declare global {
 }
 
 export function Popup() {
-  const [capturing, setCapturing] = useState(true)
-  const [captureFetch, setCaptureFetch] = useState(true)
-  const [captureXHR, setCaptureXHR] = useState(true)
-  const [preciseMode, setPreciseMode] = useState(false)
-  const [slowMs, setSlowMs] = useState(1500)
-  const [largeKb, setLargeKb] = useState(500)
-  const [apiKey, setApiKey] = useState('')
+  const [capturing, setCapturing] = useState(DEFAULT_SETTINGS.captureEnabled)
+  const [captureFetch, setCaptureFetch] = useState(DEFAULT_SETTINGS.captureFetch)
+  const [captureXHR, setCaptureXHR] = useState(DEFAULT_SETTINGS.captureXHR)
+  const [preciseMode, setPreciseMode] = useState(DEFAULT_SETTINGS.preciseModeEnabled)
+  const [slowMs, setSlowMs] = useState(DEFAULT_SETTINGS.slowRequestThresholdMs)
+  const [largeKb, setLargeKb] = useState(DEFAULT_SETTINGS.largePayloadThresholdKb)
+  const [apiKey, setApiKey] = useState(DEFAULT_SETTINGS.apiKey)
   const [showKey, setShowKey] = useState(false)
   const [testState, setTestState] = useState<TestState>('idle')
-  const [position, setPosition] = useState('Bottom Right')
-  const [showOnLoad, setShowOnLoad] = useState(true)
+  const [testMessage, setTestMessage] = useState('')
+  const [position, setPosition] = useState(DEFAULT_SETTINGS.overlayPosition)
+  const [showOnLoad, setShowOnLoad] = useState(DEFAULT_SETTINGS.showOverlayOnLoad)
   const [loaded, setLoaded] = useState(false)
   const debouncedApiKey = useDebounce(apiKey, 500)
 
@@ -70,13 +71,22 @@ export function Popup() {
     })
   }, [loaded, preciseMode])
 
+  useEffect(() => {
+    if (testState === 'idle') return
+
+    setTestState('idle')
+    setTestMessage('')
+  }, [apiKey])
+
   const testConnection = async () => {
     if (!apiKey.trim()) {
       setTestState('err')
+      setTestMessage('Enter an Anthropic API key before testing the connection.')
       return
     }
 
     setTestState('loading')
+    setTestMessage('')
 
     try {
       await saveSettings({
@@ -92,9 +102,17 @@ export function Popup() {
       })
       const response = await chrome.runtime.sendMessage({ type: 'TEST_AI_CONNECTION' }) as AISuggestionResponse | undefined
 
-      setTestState(response?.ok ? 'ok' : 'err')
-    } catch {
+      if (response?.ok) {
+        setTestState('ok')
+        setTestMessage('Connection successful.')
+        return
+      }
+
       setTestState('err')
+      setTestMessage(response?.error ?? 'Unable to connect to Anthropic.')
+    } catch (error) {
+      setTestState('err')
+      setTestMessage(error instanceof Error ? error.message : 'Unable to connect to Anthropic.')
     }
   }
 
@@ -108,6 +126,7 @@ export function Popup() {
     setApiKey(DEFAULT_SETTINGS.apiKey)
     setShowKey(false)
     setTestState('idle')
+    setTestMessage('')
     setPosition(DEFAULT_SETTINGS.overlayPosition)
     setShowOnLoad(DEFAULT_SETTINGS.showOverlayOnLoad)
   }
@@ -124,13 +143,22 @@ export function Popup() {
           </svg>
           <span>API Debugger</span>
         </div>
-        <span className={`api-popup-status${capturing ? ' is-capturing' : ''}`}>
+        <span className={`api-popup-status${loaded && capturing ? ' is-capturing' : ''}`}>
           <span className="api-popup-dot" />
-          {capturing ? 'Capturing' : 'Paused'}
+          {loaded ? (capturing ? 'Capturing' : 'Paused') : 'Loading'}
         </span>
       </header>
 
       <main className="api-popup-content">
+        {!loaded && (
+          <section className="api-popup-section" aria-live="polite">
+            <div className="api-popup-section-title">Loading</div>
+            <div className="api-popup-help">Reading saved settings...</div>
+          </section>
+        )}
+
+        {loaded && (
+          <>
         <Section title="Capture">
           <ToggleRow label="Enable capture on this tab" value={capturing} onChange={setCapturing} />
           <ToggleRow label="Capture fetch requests" value={captureFetch} onChange={setCaptureFetch} />
@@ -178,13 +206,25 @@ export function Popup() {
             <button
               className={`api-popup-test${testState === 'ok' ? ' is-ok' : ''}${testState === 'err' ? ' is-err' : ''}`}
               onClick={testConnection}
+              disabled={testState === 'loading'}
             >
               {testState === 'loading' && <span className="api-spinner" />}
               {testState === 'idle' && 'Test connection'}
               {testState === 'loading' && 'Testing...'}
               {testState === 'ok' && 'Connected'}
-              {testState === 'err' && 'Invalid key'}
+              {testState === 'err' && 'Try again'}
             </button>
+            {testMessage && (
+              <div
+                className="api-popup-help"
+                style={{
+                  marginTop: 8,
+                  color: testState === 'err' ? 'var(--api-danger)' : testState === 'ok' ? 'var(--api-success)' : undefined,
+                }}
+              >
+                {testMessage}
+              </div>
+            )}
           </div>
         </Section>
 
@@ -200,13 +240,15 @@ export function Popup() {
           </div>
           <ToggleRow label="Show on page load" value={showOnLoad} onChange={setShowOnLoad} />
         </Section>
+          </>
+        )}
       </main>
 
       <footer className="api-popup-footer">
         <span className="api-popup-version">
           v{chrome.runtime.getManifest().version}
         </span>
-        <button className="api-reset-button" onClick={resetDefaults}>Reset to defaults</button>
+        <button className="api-reset-button" onClick={resetDefaults} disabled={!loaded}>Reset to defaults</button>
       </footer>
     </div>
   )

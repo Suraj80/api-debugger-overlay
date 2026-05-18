@@ -1,16 +1,16 @@
 import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Overlay } from './Overlay'
-import { getSettings, type ApiDebuggerSettings } from '../shared/settings'
+import { DEFAULT_SETTINGS, getSettings, type ApiDebuggerSettings } from '../shared/settings'
 import { isExtensionContextValid } from '../shared/extensionGuard'
 import { sendRuntimeMessage } from '../shared/sendMessage'
 import { SettingsProvider, useUpdateSettings } from '../shared/SettingsContext'
-import type { ReplayRequest, ReplayResult } from '../shared/types'
+import type { OverlayStateSnapshot, ReplayRequest, ReplayResult } from '../shared/types'
 
 const replayRequests = new Map<string, (result: ReplayResult) => void>()
 let settingsUpdater: ((s: ApiDebuggerSettings) => void) | null = null
 
-export function App() {
+export function App({ initialPaused }: { initialPaused: boolean }) {
   const updateSettings = useUpdateSettings()
 
   useEffect(() => {
@@ -20,7 +20,7 @@ export function App() {
     }
   }, [updateSettings])
 
-  return <Overlay />
+  return <Overlay initialPaused={initialPaused} />
 }
 
 function postSettingsToPage(settings: ApiDebuggerSettings) {
@@ -31,13 +31,49 @@ function postSettingsToPage(settings: ApiDebuggerSettings) {
   }, '*')
 }
 
+function waitForDocumentElement() {
+  if (document.documentElement) {
+    return Promise.resolve(document.documentElement)
+  }
+
+  return new Promise<HTMLElement>((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (!document.documentElement) return
+
+      observer.disconnect()
+      resolve(document.documentElement)
+    })
+
+    observer.observe(document, {
+      childList: true,
+      subtree: true,
+    })
+  })
+}
+
 async function start() {
-  let settings: ApiDebuggerSettings
+  try {
+    await waitForDocumentElement()
+  } catch {
+    return
+  }
+
+  let settings = DEFAULT_SETTINGS
+  let initialPaused = false
 
   try {
     settings = await getSettings()
   } catch {
-    return
+    // Fall back to defaults instead of skipping overlay startup entirely.
+  }
+
+  if (isExtensionContextValid()) {
+    try {
+      const snapshot = await chrome.runtime.sendMessage({ type: 'GET_OVERLAY_STATE' }) as OverlayStateSnapshot | undefined
+      initialPaused = snapshot?.paused ?? false
+    } catch {
+      initialPaused = false
+    }
   }
 
   // 1. Inject the fetch interceptor into page context
@@ -54,9 +90,18 @@ async function start() {
   ;(document.head ?? document.documentElement).prepend(script)
 
   // 2. Listen for messages from the injected script and forward to service worker
+  let pageIsClosing = false
+  window.addEventListener('pagehide', () => {
+    pageIsClosing = true
+  }, { capture: true })
+  window.addEventListener('pageshow', () => {
+    pageIsClosing = false
+  }, { capture: true })
+
   window.addEventListener('message', (event) => {
     if (event.source !== window) return
     if (event.data?.source !== 'api-debugger-injected') return
+    if (pageIsClosing) return
 
     if (event.data?.type === 'API_DEBUGGER_REPLAY_RESULT') {
       const resolve = replayRequests.get(event.data.requestId)
@@ -109,6 +154,11 @@ async function start() {
   }
 
   // 3. Mount the overlay in a Shadow DOM to isolate styles from the host page
+  const existingHost = document.getElementById('api-debugger-root')
+  if (existingHost?.shadowRoot) {
+    return
+  }
+
   const host = document.createElement('div')
   host.id = 'api-debugger-root'
   const shadow = host.attachShadow({ mode: 'open' })
@@ -120,7 +170,7 @@ async function start() {
   const root = createRoot(mountPoint)
   root.render(
     <SettingsProvider initialSettings={settings}>
-      <App />
+      <App initialPaused={initialPaused} />
     </SettingsProvider>,
   )
 

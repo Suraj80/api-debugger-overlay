@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "package:extension": "node scripts/package-extension.mjs",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "test": "vitest tests/unit",

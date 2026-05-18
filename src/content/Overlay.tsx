@@ -14,7 +14,7 @@ interface RequestUpdatedMessage {
   payload: RequestEntry
 }
 
-type OverlayState = 'feed' | 'paused' | 'minimised'
+type OverlayState = 'feed' | 'paused' | 'minimised' | 'hidden'
 type JsonExpandMode = 'all' | 'none' | null
 type JsonTab = 'response' | 'request'
 type AISuggestionState = 'idle' | 'loading' | 'result' | 'error'
@@ -1545,29 +1545,74 @@ function positionClass(position: ApiDebuggerSettings['overlayPosition']) {
   return `is-${position.toLowerCase().replaceAll(' ', '-')}`
 }
 
-export function Overlay() {
+function getInitialOverlayState(settings: ApiDebuggerSettings, initialPaused: boolean): OverlayState {
+  if (!settings.captureEnabled) return 'hidden'
+  if (initialPaused) return 'paused'
+  return settings.showOverlayOnLoad ? 'feed' : 'minimised'
+}
+
+export function Overlay({ initialPaused }: { initialPaused: boolean }) {
   const settings = useSettings()
   const [requests, setRequests] = useState<RequestEntry[]>([])
-  const [state, setState] = useState<OverlayState>(settings.showOverlayOnLoad ? 'feed' : 'minimised')
+  const [state, setState] = useState<OverlayState>(() => getInitialOverlayState(settings, initialPaused))
   const [sweep, setSweep] = useState(false)
+  const [bufferedCount, setBufferedCount] = useState(0)
+  const stateRef = useRef<OverlayState>(state)
+  const bufferedRequestsRef = useRef<RequestEntry[]>([])
 
-  useEffect(() => {
-    const upsertRequest = (currentRequests: RequestEntry[], nextRequest: RequestEntry) => {
-      const existingIndex = currentRequests.findIndex(request => request.id === nextRequest.id)
-      if (existingIndex === -1) {
-        return [nextRequest, ...currentRequests].slice(0, 100)
-      }
-
-      const nextRequests = [...currentRequests]
-      nextRequests[existingIndex] = nextRequest
-      return nextRequests
+  const upsertRequest = (currentRequests: RequestEntry[], nextRequest: RequestEntry) => {
+    const existingIndex = currentRequests.findIndex(request => request.id === nextRequest.id)
+    if (existingIndex === -1) {
+      return [nextRequest, ...currentRequests].slice(0, 100)
     }
 
+    const nextRequests = [...currentRequests]
+    nextRequests[existingIndex] = nextRequest
+    return nextRequests
+  }
+
+  const upsertBufferedRequest = (nextRequest: RequestEntry) => {
+    const currentBuffered = bufferedRequestsRef.current
+    const existingIndex = currentBuffered.findIndex(request => request.id === nextRequest.id)
+
+    if (existingIndex === -1) {
+      bufferedRequestsRef.current = [nextRequest, ...currentBuffered].slice(0, 100)
+    } else {
+      const nextBuffered = [...currentBuffered]
+      nextBuffered[existingIndex] = nextRequest
+      bufferedRequestsRef.current = nextBuffered
+    }
+
+    setBufferedCount(bufferedRequestsRef.current.length)
+  }
+
+  useEffect(() => {
+    if (!settings.captureEnabled) {
+      setState('hidden')
+      return
+    }
+
+    setState(currentState => (
+      currentState === 'hidden'
+        ? getInitialOverlayState(settings, initialPaused)
+        : currentState
+    ))
+  }, [initialPaused, settings.captureEnabled, settings.showOverlayOnLoad])
+
+  useEffect(() => {
     const handler = (msg: unknown) => {
       if (isRequestCompleteMessage(msg)) {
+        if (stateRef.current === 'paused') {
+          upsertBufferedRequest(msg.payload)
+          return
+        }
         setRequests(prev => upsertRequest(prev, msg.payload))
       }
       if (isRequestUpdatedMessage(msg)) {
+        if (stateRef.current === 'paused') {
+          upsertBufferedRequest(msg.payload)
+          return
+        }
         setRequests(prev => upsertRequest(prev, msg.payload))
       }
     }
@@ -1587,6 +1632,23 @@ export function Overlay() {
     }
   }, [])
 
+  useEffect(() => {
+    stateRef.current = state
+
+    if (state !== 'feed' || bufferedRequestsRef.current.length === 0) {
+      return
+    }
+
+    setRequests(currentRequests => (
+      bufferedRequestsRef.current.reduce(
+        (nextRequests, bufferedRequest) => upsertRequest(nextRequests, bufferedRequest),
+        currentRequests,
+      )
+    ))
+    bufferedRequestsRef.current = []
+    setBufferedCount(0)
+  }, [state])
+
   const total = requests.length
   const avg = total ? Math.round(requests.reduce((sum, r) => sum + r.duration, 0) / total) : 0
   const errors = requests.filter(r => r.status >= 400).length
@@ -1600,6 +1662,18 @@ export function Overlay() {
 
   const openSidePanel = () => {
     void sendRuntimeMessage({ type: 'OPEN_SIDE_PANEL' })
+  }
+
+  const setPausedState = (paused: boolean) => {
+    setState(paused ? 'paused' : 'feed')
+    void sendRuntimeMessage({
+      type: 'SET_OVERLAY_PAUSED',
+      payload: { paused },
+    })
+  }
+
+  if (state === 'hidden') {
+    return null
   }
 
   if (state === 'minimised') {
@@ -1628,7 +1702,7 @@ export function Overlay() {
             <div className="apidbg-actions">
               <button
                 className="apidbg-icon-button"
-                onClick={() => setState(isCapturing ? 'paused' : 'feed')}
+                onClick={() => setPausedState(isCapturing)}
                 aria-label={isCapturing ? 'Pause capture' : 'Resume capture'}
                 title={isCapturing ? 'Pause' : 'Resume'}
               >
@@ -1667,8 +1741,8 @@ export function Overlay() {
 
         {state === 'paused' && (
           <div className="apidbg-paused">
-            <span>Capture paused - {requests.length} requests buffered</span>
-            <button className="apidbg-link-button" onClick={() => setState('feed')}>Resume</button>
+            <span>Capture paused - new requests are ignored</span>
+            <button className="apidbg-link-button" onClick={() => setPausedState(false)}>Resume</button>
           </div>
         )}
 
@@ -1685,6 +1759,8 @@ export function Overlay() {
                 setSweep(true)
                 window.setTimeout(() => {
                   setRequests([])
+                  bufferedRequestsRef.current = []
+                  setBufferedCount(0)
                   void sendRuntimeMessage({ type: 'CLEAR_SESSION' })
                   setSweep(false)
                 }, 300)

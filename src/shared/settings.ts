@@ -30,7 +30,7 @@ interface SecretSettings {
 export const DEFAULT_SETTINGS: ApiDebuggerSettings = {
   captureEnabled: true,
   captureFetch: true,
-  captureXHR: true,
+  captureXHR: false,
   preciseModeEnabled: false,
   slowRequestThresholdMs: 1500,
   largePayloadThresholdKb: 500,

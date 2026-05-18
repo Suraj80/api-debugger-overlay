@@ -1,6 +1,7 @@
 import type {
   AISuggestionRequest,
   AISuggestionResponse,
+  OverlayStateSnapshot,
   ReplayRequest,
   ReplayResult,
   ReplayTargetSnapshot,
@@ -23,11 +24,13 @@ const CDP_MATCH_WINDOW_MS = 5000
 const AI_RATE_LIMIT_MS = 10000
 const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
+const ANTHROPIC_BROWSER_ACCESS_HEADER = 'anthropic-dangerous-direct-browser-access'
 const AI_MODEL = 'claude-sonnet-4-20250514'
 const AI_TEST_MODEL = 'claude-haiku-4-5-20251001'
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayRequest>()
+const pausedOverlayTabs = new Set<number>()
 const requestReceivedAt = new Map<string, number>()
 const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
 const pendingRequestsByTab = new Map<number, Map<string, PendingRequestState>>()
@@ -158,6 +161,10 @@ function normalizeRequestUrl(url: string) {
 
 function getNetworkEvents(tabId: number) {
   return networkEventsByTab.get(tabId) ?? []
+}
+
+function isOverlayPaused(tabId: number) {
+  return pausedOverlayTabs.has(tabId)
 }
 
 function publishSession(tabId: number) {
@@ -430,6 +437,15 @@ async function setPreciseMode(enabled: boolean) {
   }
 }
 
+async function getOverlayStateSnapshot(tabId?: number): Promise<OverlayStateSnapshot> {
+  const resolvedTabId = tabId ?? await getActiveTabId()
+
+  return {
+    tabId: resolvedTabId ?? null,
+    paused: resolvedTabId != null ? pausedOverlayTabs.has(resolvedTabId) : false,
+  }
+}
+
 export function sanitizeUrlForAi(url: string) {
   try {
     const parsedUrl = new URL(url)
@@ -505,6 +521,7 @@ async function callAnthropic(apiKey: string, body: object) {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': ANTHROPIC_VERSION,
+      [ANTHROPIC_BROWSER_ACCESS_HEADER]: 'true',
     },
     body: JSON.stringify(body),
   })
@@ -855,6 +872,28 @@ async function getActiveTabId(): Promise<number | null> {
   return tab?.id ?? null
 }
 
+async function getTabLabel(tabId: number | null): Promise<string | null> {
+  if (tabId == null) return null
+
+  try {
+    const tab = await chrome.tabs.get(tabId)
+    const title = tab.title?.trim()
+    if (title) return title
+
+    if (tab.url) {
+      try {
+        return new URL(tab.url).hostname
+      } catch {
+        return tab.url
+      }
+    }
+  } catch {
+    // Ignore tabs that are no longer available.
+  }
+
+  return null
+}
+
 function pickTrackedTabId(preferredTabId: number | null | undefined, candidates: Iterable<number>) {
   if (preferredTabId != null) {
     for (const candidate of candidates) {
@@ -871,9 +910,11 @@ function pickTrackedTabId(preferredTabId: number | null | undefined, candidates:
 async function getSessionSnapshot(tabId?: number): Promise<SessionSnapshot> {
   const activeTabId = tabId ?? await getActiveTabId()
   const resolvedTabId = pickTrackedTabId(activeTabId, sessionsByTab.keys())
+  const tabLabel = await getTabLabel(resolvedTabId)
 
   return {
     tabId: resolvedTabId,
+    tabLabel,
     requests: resolvedTabId == null ? [] : getSession(resolvedTabId),
   }
 }
@@ -933,6 +974,7 @@ chrome.debugger.onDetach.addListener(source => {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (source.tabId == null) return
   const tabId = source.tabId
+  if (isOverlayPaused(tabId)) return
   const cdpRequests = getCdpRequests(tabId)
 
   if (method === 'Network.requestWillBeSent') {
@@ -1010,6 +1052,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   sessionsByTab.delete(tabId)
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
+  pausedOverlayTabs.delete(tabId)
   networkEventsByTab.delete(tabId)
   clearAllPendingRequests(tabId)
   void detachDebugger(tabId)
@@ -1029,6 +1072,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 chrome.webRequest.onCompleted.addListener(details => {
   if (details.tabId < 0) return
+  if (isOverlayPaused(details.tabId)) return
 
   rememberNetworkEvent(details.tabId, {
     method: details.method.toUpperCase(),
@@ -1045,6 +1089,11 @@ chrome.webRequest.onCompleted.addListener(details => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_SESSION') {
     getSessionSnapshot(message.tabId).then(sendResponse)
+    return true
+  }
+
+  if (message.type === 'GET_OVERLAY_STATE') {
+    getOverlayStateSnapshot(message.tabId).then(sendResponse)
     return true
   }
 
@@ -1092,6 +1141,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (!sender.tab?.id) return false
 
+  if (message.type === 'SET_OVERLAY_PAUSED') {
+    if (message.payload.paused) {
+      pausedOverlayTabs.add(sender.tab.id)
+      networkEventsByTab.delete(sender.tab.id)
+      clearAllPendingRequests(sender.tab.id)
+      cdpRequestsByTab.delete(sender.tab.id)
+    } else {
+      pausedOverlayTabs.delete(sender.tab.id)
+    }
+    sendResponse({ ok: true })
+    return false
+  }
+
   if (message.type === 'OPEN_SIDE_PANEL') {
     chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => {
       // Side panel open can fail if Chrome does not treat the source as a user gesture.
@@ -1120,11 +1182,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'REQUEST_COMPLETE') {
+    if (isOverlayPaused(sender.tab.id)) return false
     queueRequestCompletion(sender.tab.id, message.payload)
     return false
   }
 
   if (message.type === 'TIMING_UPDATE') {
+    if (isOverlayPaused(sender.tab.id)) return false
     queueTimingUpdate(sender.tab.id, message.payload)
     return false
   }

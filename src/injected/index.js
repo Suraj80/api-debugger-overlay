@@ -9,7 +9,7 @@ const originalXhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader
 const DEFAULT_SETTINGS = {
   captureEnabled: true,
   captureFetch: true,
-  captureXHR: true,
+  captureXHR: false,
   slowRequestThresholdMs: 1500,
   largePayloadThresholdKb: 500,
 }

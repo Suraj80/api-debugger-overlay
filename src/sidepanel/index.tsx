@@ -67,6 +67,7 @@ function isDependenciesUpdatedMessage(message: unknown): message is Dependencies
 export function SidePanel() {
   const [tab, setTab] = useState<Tab>('session')
   const [sessionTabId, setSessionTabId] = useState<number | null>(null)
+  const [sessionTabLabel, setSessionTabLabel] = useState<string | null>(null)
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [replayTarget, setReplayTarget] = useState<ReplayRequest | null>(null)
 
@@ -82,11 +83,13 @@ export function SidePanel() {
         if (cancelled || !snapshot) return
 
         setSessionTabId(snapshot.tabId)
+        setSessionTabLabel(snapshot.tabLabel ?? null)
         setRequests(snapshot.requests)
       }).catch(() => {
         if (cancelled) return
 
         setSessionTabId(null)
+        setSessionTabLabel(null)
         setRequests([])
       })
 
@@ -149,7 +152,7 @@ export function SidePanel() {
     <div className="api-theme-shell api-sidepanel">
       <header className="api-sidepanel-header">
         <span className="api-sidepanel-title">API Debugger</span>
-        {sessionTabId != null && <span className="api-muted">Tab {sessionTabId}</span>}
+        {(sessionTabLabel || sessionTabId != null) && <span className="api-muted">{sessionTabLabel ?? 'Current tab'}</span>}
         <button
           className="api-sidepanel-close"
           type="button"
