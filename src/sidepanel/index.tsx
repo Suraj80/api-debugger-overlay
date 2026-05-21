@@ -774,32 +774,53 @@ function LatencyChart({ requests }: { requests: RequestEntry[] }) {
     const styles = getComputedStyle(canvas)
     const primary = styles.getPropertyValue('--api-color-primary-soft').trim() || '#cbb8ff'
     const border = styles.getPropertyValue('--api-border-strong').trim() || '#5d536b'
+    const muted = styles.getPropertyValue('--api-text-subtle').trim() || '#79737f'
     const success = styles.getPropertyValue('--api-success').trim() || '#8fe6bc'
     const warning = styles.getPropertyValue('--api-warning').trim() || '#ffd36f'
     const danger = styles.getPropertyValue('--api-danger').trim() || '#ff8f8f'
+    const chartLeft = 42
+    const chartRight = 8
+    const chartTop = 8
+    const chartBottom = 8
 
     ctx.scale(dpr, dpr)
     ctx.clearRect(0, 0, width, height)
     if (requests.length === 0) return
 
     const max = Math.max(...requests.map(request => request.duration), 2000)
-    ;[500, 1500].forEach(threshold => {
-      const y = height - (threshold / max) * (height - 16) - 8
+    const chartWidth = Math.max(0, width - chartLeft - chartRight)
+    const chartHeight = Math.max(0, height - chartTop - chartBottom)
+    const axisTicks = Array.from(new Set([
+      0,
+      Math.round(max * 0.25),
+      Math.round(max * 0.5),
+      Math.round(max * 0.75),
+      max,
+    ])).sort((left, right) => left - right)
+
+    ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+    ctx.fillStyle = muted
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'middle'
+
+    axisTicks.forEach(threshold => {
+      const y = height - (threshold / max) * chartHeight - chartBottom
       ctx.setLineDash([4, 4])
       ctx.strokeStyle = border
       ctx.globalAlpha = 0.35
       ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(width, y)
+      ctx.moveTo(chartLeft, y)
+      ctx.lineTo(width - chartRight, y)
       ctx.stroke()
+      ctx.fillText(formatAxisLatency(threshold), chartLeft - 6, y)
     })
 
     ctx.globalAlpha = 1
     ctx.setLineDash([])
 
     const points = requests.map((request, index) => ({
-      x: (index / Math.max(1, requests.length - 1)) * (width - 16) + 8,
-      y: height - (request.duration / max) * (height - 16) - 8,
+      x: chartLeft + (index / Math.max(1, requests.length - 1)) * chartWidth,
+      y: height - (request.duration / max) * chartHeight - chartBottom,
       request,
     }))
 
@@ -842,6 +863,15 @@ function LatencyChart({ requests }: { requests: RequestEntry[] }) {
       )}
     </div>
   )
+}
+
+function formatAxisLatency(value: number) {
+  if (value >= 1000) {
+    const seconds = value / 1000
+    return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`
+  }
+
+  return `${value}ms`
 }
 
 function MethodPill({ method }: { method: string }) {

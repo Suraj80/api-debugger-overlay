@@ -14,7 +14,8 @@ export interface ApiDebuggerSettings {
 
 export const API_DEBUGGER_SETTINGS_KEY = 'apiDebuggerSettings'
 export const API_DEBUGGER_SECRET_SETTINGS_KEY = 'apiDebuggerSecretSettings'
-const API_KEY_ENCRYPTION_VERSION = 1
+const API_KEY_ENCRYPTION_VERSION = 2
+const LEGACY_API_KEY_ENCRYPTION_VERSION = 1
 
 interface EncryptedApiKey {
   version: number
@@ -30,7 +31,7 @@ interface SecretSettings {
 export const DEFAULT_SETTINGS: ApiDebuggerSettings = {
   captureEnabled: true,
   captureFetch: true,
-  captureXHR: false,
+  captureXHR: true,
   preciseModeEnabled: false,
   slowRequestThresholdMs: 1500,
   largePayloadThresholdKb: 500,
@@ -66,13 +67,16 @@ function base64ToBytes(value: string) {
   return bytes
 }
 
-async function getApiKeyEncryptionKey() {
+async function getApiKeyEncryptionKey(includeUserAgent = false) {
   const encoder = new TextEncoder()
   const extensionId = chrome.runtime?.id ?? 'api-debugger'
   const userAgent = globalThis.navigator?.userAgent ?? 'unknown-runtime'
+  const keySeed = includeUserAgent
+    ? `${extensionId}:api-debugger-overlay:${userAgent}`
+    : `${extensionId}:api-debugger-overlay`
   const keyMaterial = await crypto.subtle.digest(
     'SHA-256',
-    encoder.encode(`${extensionId}:api-debugger-overlay:${userAgent}`),
+    encoder.encode(keySeed),
   )
 
   return crypto.subtle.importKey(
@@ -103,10 +107,12 @@ export async function encryptApiKey(apiKey: string): Promise<EncryptedApiKey> {
 
 export async function decryptApiKey(encrypted: EncryptedApiKey | undefined): Promise<string> {
   if (!encrypted) return ''
-  if (encrypted.version !== API_KEY_ENCRYPTION_VERSION) return ''
+  if (encrypted.version !== API_KEY_ENCRYPTION_VERSION && encrypted.version !== LEGACY_API_KEY_ENCRYPTION_VERSION) {
+    return ''
+  }
 
   try {
-    const key = await getApiKeyEncryptionKey()
+    const key = await getApiKeyEncryptionKey(encrypted.version === LEGACY_API_KEY_ENCRYPTION_VERSION)
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: base64ToBytes(encrypted.iv) },
       key,
@@ -139,7 +145,8 @@ export async function getSettings(): Promise<ApiDebuggerSettings> {
     legacyLocalSettings ||
     secretSettings?.apiKey ||
     syncedSettings?.apiKey ||
-    (secretSettings && !secretSettings.apiKeyEncrypted),
+    (secretSettings && !secretSettings.apiKeyEncrypted) ||
+    (secretSettings?.apiKeyEncrypted && secretSettings.apiKeyEncrypted.version !== API_KEY_ENCRYPTION_VERSION),
   )
 
   if (needsMigration) {

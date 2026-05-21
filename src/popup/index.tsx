@@ -71,12 +71,11 @@ export function Popup() {
     })
   }, [loaded, preciseMode])
 
-  useEffect(() => {
-    if (testState === 'idle') return
-
+  const onApiKeyChange = (value: string) => {
+    setApiKey(value)
     setTestState('idle')
     setTestMessage('')
-  }, [apiKey])
+  }
 
   const testConnection = async () => {
     if (!apiKey.trim()) {
@@ -195,7 +194,7 @@ export function Popup() {
                 className="api-popup-key-input"
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
-                onChange={event => setApiKey(event.target.value)}
+                onChange={event => onApiKeyChange(event.target.value)}
                 placeholder="sk-ant-..."
               />
               <button className="api-popup-eye" onClick={() => setShowKey(value => !value)} title={showKey ? 'Hide key' : 'Show key'}>

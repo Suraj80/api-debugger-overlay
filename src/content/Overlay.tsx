@@ -1124,10 +1124,13 @@ function JsonNode({
   )
 }
 
-function countKeys(v: unknown): number {
-  if (!v || typeof v !== 'object') return 0
-  if (Array.isArray(v)) return v.reduce((a: number, x) => a + countKeys(x), 0)
-  return Object.keys(v).length + Object.values(v).reduce((a: number, x) => a + countKeys(x), 0)
+function countKeys(v: unknown, depth = 0): number {
+  if (depth > 8) return 0
+  if (Array.isArray(v)) return v.reduce((a: number, x) => a + countKeys(x, depth + 1), 0)
+  if (v && typeof v === 'object') {
+    return Object.keys(v).length + Object.values(v).reduce((a: number, x) => a + countKeys(x, depth + 1), 0)
+  }
+  return 0
 }
 
 function parseBody(body: string | null): unknown {
@@ -1541,6 +1544,29 @@ function EmptyFeed() {
   )
 }
 
+class OverlayErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 12, color: '#F87171', fontSize: 12 }}>
+          Overlay error - reload the page to reset.
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
+
 function positionClass(position: ApiDebuggerSettings['overlayPosition']) {
   return `is-${position.toLowerCase().replaceAll(' ', '-')}`
 }
@@ -1556,7 +1582,9 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [state, setState] = useState<OverlayState>(() => getInitialOverlayState(settings, initialPaused))
   const [sweep, setSweep] = useState(false)
-  const [bufferedCount, setBufferedCount] = useState(0)
+  const effectiveState: OverlayState = !settings.captureEnabled
+    ? 'hidden'
+    : (state === 'hidden' ? getInitialOverlayState({ ...settings, captureEnabled: true }, initialPaused) : state)
   const stateRef = useRef<OverlayState>(state)
   const bufferedRequestsRef = useRef<RequestEntry[]>([])
 
@@ -1583,21 +1611,7 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
       bufferedRequestsRef.current = nextBuffered
     }
 
-    setBufferedCount(bufferedRequestsRef.current.length)
   }
-
-  useEffect(() => {
-    if (!settings.captureEnabled) {
-      setState('hidden')
-      return
-    }
-
-    setState(currentState => (
-      currentState === 'hidden'
-        ? getInitialOverlayState(settings, initialPaused)
-        : currentState
-    ))
-  }, [initialPaused, settings.captureEnabled, settings.showOverlayOnLoad])
 
   useEffect(() => {
     const handler = (msg: unknown) => {
@@ -1633,9 +1647,9 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
   }, [])
 
   useEffect(() => {
-    stateRef.current = state
+    stateRef.current = effectiveState
 
-    if (state !== 'feed' || bufferedRequestsRef.current.length === 0) {
+    if (effectiveState !== 'feed' || bufferedRequestsRef.current.length === 0) {
       return
     }
 
@@ -1646,15 +1660,14 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
       )
     ))
     bufferedRequestsRef.current = []
-    setBufferedCount(0)
-  }, [state])
+  }, [effectiveState])
 
   const total = requests.length
   const avg = total ? Math.round(requests.reduce((sum, r) => sum + r.duration, 0) / total) : 0
   const errors = requests.filter(r => r.status >= 400).length
   const errorRate = total ? Math.round((errors / total) * 1000) / 10 : 0
   const dupes = requests.filter(r => r.isDuplicate).length
-  const isCapturing = state !== 'paused'
+  const isCapturing = effectiveState !== 'paused'
   const showSparkline = requests.length >= 3
   const avgColor = avg < 500 ? 'var(--api-success)' : avg < 1500 ? 'var(--api-warning)' : 'var(--api-danger)'
   const errColor = errorRate === 0 ? 'var(--api-success)' : errorRate <= 5 ? 'var(--api-warning)' : 'var(--api-danger)'
@@ -1672,11 +1685,11 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
     })
   }
 
-  if (state === 'hidden') {
+  if (effectiveState === 'hidden') {
     return null
   }
 
-  if (state === 'minimised') {
+  if (effectiveState === 'minimised') {
     return (
       <>
         <style>{overlayThemeCss}</style>
@@ -1739,17 +1752,19 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
 
         {showSparkline && <Sparkline requests={requests} />}
 
-        {state === 'paused' && (
+        {effectiveState === 'paused' && (
           <div className="apidbg-paused">
             <span>Capture paused - new requests are ignored</span>
             <button className="apidbg-link-button" onClick={() => setPausedState(false)}>Resume</button>
           </div>
         )}
 
-        <div className={`apidbg-list apidbg-scroll${state === 'paused' ? ' is-paused' : ''}`}>
-          {sweep && <div className="apidbg-sweep" />}
-          {requests.length === 0 ? <EmptyFeed /> : requests.map(r => <RequestRow key={r.id} req={r} />)}
-        </div>
+        <OverlayErrorBoundary>
+          <div className={`apidbg-list apidbg-scroll${effectiveState === 'paused' ? ' is-paused' : ''}`}>
+            {sweep && <div className="apidbg-sweep" />}
+            {requests.length === 0 ? <EmptyFeed /> : requests.map(r => <RequestRow key={r.id} req={r} />)}
+          </div>
+        </OverlayErrorBoundary>
 
         {requests.length > 0 && (
           <div className="apidbg-footer">
@@ -1760,7 +1775,6 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
                 window.setTimeout(() => {
                   setRequests([])
                   bufferedRequestsRef.current = []
-                  setBufferedCount(0)
                   void sendRuntimeMessage({ type: 'CLEAR_SESSION' })
                   setSweep(false)
                 }, 300)
