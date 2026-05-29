@@ -115,6 +115,35 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('840ms')
   })
 
+  it('groups duplicate request instances by endpoint path in the dependency SVG', async () => {
+    const { buildDependencySvg } = await import('../../src/sidepanel/index')
+
+    const html = buildDependencySvg([
+      createRequest({
+        id: 'upstream-a',
+        url: 'https://api.example.com/backend-api/system_hints?request=1',
+      }),
+      createRequest({
+        id: 'upstream-b',
+        url: 'https://api.example.com/backend-api/system_hints?request=2',
+      }),
+      createRequest({
+        id: 'downstream',
+        url: 'https://api.example.com/backend-api/messages',
+        duration: 620,
+        dependsOn: ['upstream-a', 'upstream-b'],
+      }),
+      createRequest({
+        id: 'independent',
+        url: 'https://api.example.com/health',
+      }),
+    ])
+
+    expect(html).toContain('/backend-api/system_hints - 2 captured call(s)')
+    expect(html).not.toContain('/health')
+    expect(html).toContain('2 call chain(s)')
+  })
+
   it('marks additions and deletions in replay diffs', async () => {
     const { computeDiff } = await import('../../src/sidepanel/index')
 

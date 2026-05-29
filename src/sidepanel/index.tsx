@@ -8,6 +8,24 @@ import '../index.css'
 
 type Tab = 'session' | 'deps' | 'replay'
 type DiffLine = { text: string; kind: 'same' | 'add' | 'del' }
+type DependencyGraphNode = {
+  id: string
+  label: string
+  count: number
+  incoming: number
+  outgoing: number
+  level: number
+}
+type DependencyGraphEdge = {
+  from: string
+  to: string
+  latency: number
+  count: number
+}
+type DependencyGraphLayoutNode = DependencyGraphNode & {
+  x: number
+  y: number
+}
 type SessionUpdatedMessage = {
   type: 'SESSION_UPDATED'
   tabId: number
@@ -288,50 +306,8 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
 }
 
 function DependencyTab({ requests }: { requests: RequestEntry[] }) {
-  const { nodes, edges } = useMemo(() => {
-    const requestById = new Map(requests.map(request => [request.id, request]))
-    const map = new Map<string, { id: string; label: string; count: number }>()
-    const edgeMap = new Map<string, { from: string; to: string; latency: number; count: number }>()
-
-    requests.forEach(request => {
-      const path = getPath(request.url)
-      const entry = map.get(path) ?? {
-        id: path,
-        label: getEndpointLabel(path),
-        count: 0,
-      }
-      entry.count += 1
-      map.set(path, entry)
-    })
-
-    requests.forEach(request => {
-      const to = getPath(request.url)
-      request.dependsOn.forEach(sourceId => {
-        const source = requestById.get(sourceId)
-        if (!source) return
-
-        const from = getPath(source.url)
-        if (!map.has(from) || !map.has(to) || from === to) return
-
-        const key = `${from} -> ${to}`
-        const edge = edgeMap.get(key) ?? { from, to, latency: 0, count: 0 }
-        edge.latency += request.duration
-        edge.count += 1
-        edgeMap.set(key, edge)
-      })
-    })
-
-    const edgeList = Array.from(edgeMap.values())
-      .map(edge => ({ ...edge, latency: Math.round(edge.latency / edge.count) }))
-      .sort((a, b) => b.count - a.count || b.latency - a.latency)
-
-    const connectedIds = new Set(edgeList.flatMap(edge => [edge.from, edge.to]))
-    const nodeList = Array.from(map.values())
-      .filter(node => connectedIds.has(node.id))
-      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
-
-    return { nodes: nodeList, edges: edgeList }
-  }, [requests])
+  const graph = useMemo(() => buildDependencyGraph(requests), [requests])
+  const { nodes, edges } = graph
 
   if (edges.length === 0) {
     return (
@@ -348,22 +324,20 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
   }
 
   const width = 360
-  const height = 360
-  const centerX = width / 2
-  const centerY = height / 2
-  const radius = 122
-  const positions = new Map(nodes.map((node, index) => {
-    const angle = (index / nodes.length) * Math.PI * 2 - Math.PI / 2
-    return [node.id, {
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
-    }]
-  }))
+  const height = 420
+  const positions = new Map(
+    buildDependencyLayout(nodes, width, height, {
+      top: 48,
+      right: 34,
+      bottom: 62,
+      left: 34,
+    }).map(node => [node.id, node]),
+  )
 
   return (
     <section className="api-sidepanel-section">
       <SectionHeading>API Dependency Graph</SectionHeading>
-      <p className="api-muted">Nodes = endpoints. Edges = inferred call chains. Node size = call frequency.</p>
+      <p className="api-muted">Grouped by endpoint path. Only connected endpoints are shown. Top rows are root calls; lower rows are downstream dependents.</p>
       <svg viewBox={`0 0 ${width} ${height}`} className="api-dependency-graph" role="img" aria-label={`API dependency graph with ${nodes.length} endpoints and ${edges.length} inferred dependencies`}>
         <desc>Directed edges show inferred request chains. Node size represents call frequency and edge color represents average latency.</desc>
         <defs>
@@ -376,17 +350,20 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
           const end = positions.get(edge.to)
           if (!start || !end) return null
           const color = latencyColor(edge.latency)
+          const curveY = start.y + (end.y - start.y) * 0.45
+          const path = `M ${start.x.toFixed(1)} ${(start.y + Math.min(20, 8 + start.count * 1.5)).toFixed(1)} C ${start.x.toFixed(1)} ${curveY.toFixed(1)} ${end.x.toFixed(1)} ${(curveY + 10).toFixed(1)} ${end.x.toFixed(1)} ${(end.y - Math.min(20, 8 + end.count * 1.5)).toFixed(1)}`
 
           return (
             <g key={`${edge.from}-${edge.to}-${index}`}>
               <path
-                d={`M ${start.x.toFixed(1)} ${start.y.toFixed(1)} L ${end.x.toFixed(1)} ${end.y.toFixed(1)}`}
+                d={path}
                 fill="none"
                 stroke={color}
-                strokeWidth="1.6"
+                strokeWidth={Math.min(3.2, 1.4 + edge.count * 0.35)}
                 markerEnd="url(#api-arrow)"
+                opacity="0.9"
               />
-              <title>{getEndpointLabel(edge.from)} to {getEndpointLabel(edge.to)} - avg {formatMs(edge.latency)}</title>
+              <title>{getEndpointLabel(edge.from)} to {getEndpointLabel(edge.to)} - {edge.count} call chain(s), avg {formatMs(edge.latency)}</title>
             </g>
           )
         })}
@@ -406,6 +383,10 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
             />
           )
         })}
+        <g transform={`translate(10, 18)`} fontSize="9" fill="var(--api-text-subtle)">
+          <text x="0" y="0">Roots</text>
+          <text x={width - 74} y="0">Downstream</text>
+        </g>
         <g transform={`translate(12, ${height - 22})`} fontSize="10" fill="var(--api-text-subtle)">
           <line x1="0" y1="6" x2="20" y2="6" stroke="#22C55E" strokeWidth="1.5" />
           <text x="26" y="9">Fast under 500ms</text>
@@ -1375,13 +1356,92 @@ function buildLatencySvg(requests: RequestEntry[]) {
 }
 
 export function buildDependencySvg(requests: RequestEntry[]) {
+  const { nodes, edges } = buildDependencyGraph(requests)
+
+  if (edges.length === 0) {
+    return '<div class="muted">No inferred dependencies were captured in this session.</div>'
+  }
+
+  const width = 980
+  const height = 430
+  const positions = new Map(
+    buildDependencyLayout(nodes, width, height, {
+      top: 72,
+      right: 48,
+      bottom: 56,
+      left: 48,
+    }).map(node => [node.id, node]),
+  )
+  const lines = edges.map(edge => {
+    const start = positions.get(edge.from)
+    const end = positions.get(edge.to)
+    if (!start || !end) return ''
+    const startRadius = Math.min(20, 8 + start.count * 1.5)
+    const endRadius = Math.min(20, 8 + end.count * 1.5)
+    const startY = start.y + startRadius
+    const endY = end.y - endRadius
+    const midX = (start.x + end.x) / 2
+    const midY = (startY + endY) / 2
+    const curveY = startY + (endY - startY) * 0.45
+
+    return `<g>
+      <path d="M ${start.x.toFixed(1)} ${startY.toFixed(1)} C ${start.x.toFixed(1)} ${curveY.toFixed(1)} ${end.x.toFixed(1)} ${(curveY + 14).toFixed(1)} ${end.x.toFixed(1)} ${endY.toFixed(1)}" fill="none" stroke="${latencyColor(edge.latency)}" stroke-width="${Math.min(4, 1.2 + edge.count * 0.5).toFixed(1)}" marker-end="url(#report-arrow)" opacity="0.88">
+        <title>${escapeHtml(`${getEndpointLabel(edge.from)} -> ${getEndpointLabel(edge.to)} - ${edge.count} call chain(s), avg ${formatMs(edge.latency)}`)}</title>
+      </path>
+      <text x="${midX.toFixed(1)}" y="${(midY - 5).toFixed(1)}" fill="#9c96a6" font-size="9" text-anchor="middle">${formatMs(edge.latency)}</text>
+    </g>`
+  }).join('')
+  const nodeMarkup = nodes.map(node => {
+    const position = positions.get(node.id)!
+    const count = node.count
+    const nodeRadius = Math.min(20, 8 + count * 1.5)
+    return `<g>
+      <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius + 7}" fill="rgba(203, 184, 255, 0.07)" />
+      <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius}" fill="#292630" stroke="#cbb8ff" stroke-width="1.5">
+        <title>${escapeHtml(`${node.id} - ${count} captured call(s)`)}</title>
+      </circle>
+      <circle cx="${(position.x + nodeRadius - 2).toFixed(1)}" cy="${(position.y - nodeRadius + 2).toFixed(1)}" r="8" fill="#8069bf" stroke="#121015" stroke-width="1.5" />
+      <text x="${(position.x + nodeRadius - 2).toFixed(1)}" y="${(position.y - nodeRadius + 5).toFixed(1)}" fill="#eee8f5" font-size="8" font-weight="800" text-anchor="middle">${count}</text>
+      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 16).toFixed(1)}" fill="#eee8f5" font-size="10" font-weight="700" text-anchor="middle">${escapeHtml(trimMiddle(node.label, 26))}</text>
+      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 29).toFixed(1)}" fill="#79737f" font-size="9" text-anchor="middle">${escapeHtml(trimMiddle(node.id, 34))}</text>
+    </g>`
+  }).join('')
+
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Dependency map">
+    <defs>
+      <marker id="report-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 Z" fill="#9c96a6" />
+      </marker>
+    </defs>
+    <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="#18151d" />
+    <text x="18" y="24" fill="#eee8f5" font-size="13" font-weight="800">Inferred API dependencies</text>
+    <text x="18" y="41" fill="#79737f" font-size="10">Grouped by endpoint path. Only connected endpoints are shown. Edge labels show downstream average latency.</text>
+    <g transform="translate(${width - 380}, 26)" font-size="10" fill="#9c96a6">
+      <line x1="0" y1="0" x2="22" y2="0" stroke="#22C55E" stroke-width="2" /><text x="30" y="4">Fast</text>
+      <line x1="86" y1="0" x2="108" y2="0" stroke="#F59E0B" stroke-width="2" /><text x="116" y="4">500ms+</text>
+      <line x1="200" y1="0" x2="222" y2="0" stroke="#EF4444" stroke-width="2" /><text x="230" y="4">1.5s+</text>
+    </g>
+    <text x="18" y="62" fill="#9c96a6" font-size="10">Root requests appear near the top; downstream requests flow downward.</text>
+    ${lines}
+    ${nodeMarkup}
+  </svg>`
+}
+
+function buildDependencyGraph(requests: RequestEntry[]) {
   const requestById = new Map(requests.map(request => [request.id, request]))
-  const countByPath = new Map<string, number>()
+  const nodeMap = new Map<string, { id: string; label: string; count: number }>()
+  const edgeMap = new Map<string, DependencyGraphEdge>()
+
   requests.forEach(request => {
     const path = getPath(request.url)
-    countByPath.set(path, (countByPath.get(path) ?? 0) + 1)
+    const entry = nodeMap.get(path) ?? {
+      id: path,
+      label: getEndpointLabel(path),
+      count: 0,
+    }
+    entry.count += 1
+    nodeMap.set(path, entry)
   })
-  const edgeMap = new Map<string, { from: string; to: string; latency: number; count: number }>()
 
   requests.forEach(request => {
     const to = getPath(request.url)
@@ -1390,7 +1450,7 @@ export function buildDependencySvg(requests: RequestEntry[]) {
       if (!source) return
 
       const from = getPath(source.url)
-      if (from === to) return
+      if (!nodeMap.has(from) || !nodeMap.has(to) || from === to) return
 
       const key = `${from} -> ${to}`
       const edge = edgeMap.get(key) ?? { from, to, latency: 0, count: 0 }
@@ -1404,72 +1464,121 @@ export function buildDependencySvg(requests: RequestEntry[]) {
     .map(edge => ({ ...edge, latency: Math.round(edge.latency / edge.count) }))
     .sort((a, b) => b.count - a.count || b.latency - a.latency)
 
-  if (edges.length === 0) {
-    return '<div class="muted">No inferred dependencies were captured in this session.</div>'
+  const connectedIds = new Set(edges.flatMap(edge => [edge.from, edge.to]))
+  const incoming = new Map<string, number>()
+  const outgoing = new Map<string, number>()
+
+  edges.forEach(edge => {
+    outgoing.set(edge.from, (outgoing.get(edge.from) ?? 0) + edge.count)
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + edge.count)
+  })
+
+  const nodes = assignDependencyLevels(
+    Array.from(nodeMap.values())
+      .filter(node => connectedIds.has(node.id))
+      .map(node => ({
+        ...node,
+        incoming: incoming.get(node.id) ?? 0,
+        outgoing: outgoing.get(node.id) ?? 0,
+      })),
+    edges,
+  )
+    .sort((a, b) => a.level - b.level || b.count - a.count || a.label.localeCompare(b.label))
+
+  return { nodes, edges }
+}
+
+function assignDependencyLevels(
+  nodes: Array<{ id: string; label: string; count: number; incoming: number; outgoing: number }>,
+  edges: DependencyGraphEdge[],
+): DependencyGraphNode[] {
+  const incomingCounts = new Map(nodes.map(node => [node.id, 0]))
+  const children = new Map<string, string[]>()
+  const parents = new Map<string, string[]>()
+
+  edges.forEach(edge => {
+    incomingCounts.set(edge.to, (incomingCounts.get(edge.to) ?? 0) + 1)
+    const childList = children.get(edge.from) ?? []
+    childList.push(edge.to)
+    children.set(edge.from, childList)
+
+    const parentList = parents.get(edge.to) ?? []
+    parentList.push(edge.from)
+    parents.set(edge.to, parentList)
+  })
+
+  const levels = new Map<string, number>()
+  const queue = nodes
+    .filter(node => (incomingCounts.get(node.id) ?? 0) === 0)
+    .sort((a, b) => b.outgoing - a.outgoing || b.count - a.count || a.label.localeCompare(b.label))
+    .map(node => node.id)
+
+  queue.forEach(id => levels.set(id, 0))
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!
+    const currentLevel = levels.get(currentId) ?? 0
+
+    ;(children.get(currentId) ?? []).forEach(childId => {
+      levels.set(childId, Math.max(levels.get(childId) ?? 0, currentLevel + 1))
+      incomingCounts.set(childId, (incomingCounts.get(childId) ?? 1) - 1)
+      if ((incomingCounts.get(childId) ?? 0) === 0) {
+        queue.push(childId)
+      }
+    })
   }
 
-  const paths = Array.from(new Set(edges.flatMap(edge => [edge.from, edge.to])))
-  const width = 980
-  const height = 430
-  const centerX = width / 2
-  const centerY = height / 2 + 8
-  const radius = Math.min(165, 62 + paths.length * 15)
-  const positions = new Map(paths.map((path, index) => {
-    const angle = (index / paths.length) * Math.PI * 2 - Math.PI / 2
-    return [path, {
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
-    }]
+  nodes.forEach(node => {
+    if (levels.has(node.id)) return
+
+    const parentLevels = (parents.get(node.id) ?? [])
+      .map(parentId => levels.get(parentId))
+      .filter((level): level is number => typeof level === 'number')
+    levels.set(node.id, parentLevels.length > 0 ? Math.max(...parentLevels) + 1 : 0)
+  })
+
+  return nodes.map(node => ({
+    ...node,
+    level: levels.get(node.id) ?? 0,
   }))
-  const lines = edges.map(edge => {
-    const start = positions.get(edge.from)
-    const end = positions.get(edge.to)
-    if (!start || !end) return ''
-    const midX = (start.x + end.x) / 2
-    const midY = (start.y + end.y) / 2
-    const curveX = centerX + (midX - centerX) * 0.25
-    const curveY = centerY + (midY - centerY) * 0.25
+}
 
-    return `<g>
-      <path d="M ${start.x.toFixed(1)} ${start.y.toFixed(1)} Q ${curveX.toFixed(1)} ${curveY.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}" fill="none" stroke="${latencyColor(edge.latency)}" stroke-width="${Math.min(4, 1.2 + edge.count * 0.5).toFixed(1)}" marker-end="url(#report-arrow)" opacity="0.88">
-        <title>${escapeHtml(`${getEndpointLabel(edge.from)} -> ${getEndpointLabel(edge.to)} - ${edge.count} call chain(s), avg ${formatMs(edge.latency)}`)}</title>
-      </path>
-      <text x="${midX.toFixed(1)}" y="${(midY - 5).toFixed(1)}" fill="#9c96a6" font-size="9" text-anchor="middle">${formatMs(edge.latency)}</text>
-    </g>`
-  }).join('')
-  const nodes = paths.map(path => {
-    const position = positions.get(path)!
-    const count = countByPath.get(path) ?? 1
-    const nodeRadius = Math.min(20, 8 + count * 1.5)
-    return `<g>
-      <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius + 7}" fill="rgba(203, 184, 255, 0.07)" />
-      <circle cx="${position.x.toFixed(1)}" cy="${position.y.toFixed(1)}" r="${nodeRadius}" fill="#292630" stroke="#cbb8ff" stroke-width="1.5">
-        <title>${escapeHtml(`${path} - ${count} captured call(s)`)}</title>
-      </circle>
-      <circle cx="${(position.x + nodeRadius - 2).toFixed(1)}" cy="${(position.y - nodeRadius + 2).toFixed(1)}" r="8" fill="#8069bf" stroke="#121015" stroke-width="1.5" />
-      <text x="${(position.x + nodeRadius - 2).toFixed(1)}" y="${(position.y - nodeRadius + 5).toFixed(1)}" fill="#eee8f5" font-size="8" font-weight="800" text-anchor="middle">${count}</text>
-      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 16).toFixed(1)}" fill="#eee8f5" font-size="10" font-weight="700" text-anchor="middle">${escapeHtml(trimMiddle(getEndpointLabel(path), 26))}</text>
-      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 29).toFixed(1)}" fill="#79737f" font-size="9" text-anchor="middle">${escapeHtml(trimMiddle(path, 34))}</text>
-    </g>`
-  }).join('')
+function buildDependencyLayout(
+  nodes: DependencyGraphNode[],
+  width: number,
+  height: number,
+  padding: { top: number; right: number; bottom: number; left: number },
+): DependencyGraphLayoutNode[] {
+  const maxLevel = Math.max(...nodes.map(node => node.level), 0)
+  const grouped = new Map<number, DependencyGraphNode[]>()
 
-  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Dependency map">
-    <defs>
-      <marker id="report-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
-        <path d="M0,0 L9,4.5 L0,9 Z" fill="#9c96a6" />
-      </marker>
-    </defs>
-    <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="#18151d" />
-    <text x="18" y="24" fill="#eee8f5" font-size="13" font-weight="800">Inferred API dependencies</text>
-    <text x="18" y="41" fill="#79737f" font-size="10">Node size shows captured call frequency. Edge labels show downstream average latency.</text>
-    <g transform="translate(${width - 380}, 26)" font-size="10" fill="#9c96a6">
-      <line x1="0" y1="0" x2="22" y2="0" stroke="#22C55E" stroke-width="2" /><text x="30" y="4">Fast</text>
-      <line x1="86" y1="0" x2="108" y2="0" stroke="#F59E0B" stroke-width="2" /><text x="116" y="4">500ms+</text>
-      <line x1="200" y1="0" x2="222" y2="0" stroke="#EF4444" stroke-width="2" /><text x="230" y="4">1.5s+</text>
-    </g>
-    ${lines}
-    ${nodes}
-  </svg>`
+  nodes.forEach(node => {
+    const levelNodes = grouped.get(node.level) ?? []
+    levelNodes.push(node)
+    grouped.set(node.level, levelNodes)
+  })
+
+  return Array.from(grouped.entries())
+    .sort((a, b) => a[0] - b[0])
+    .flatMap(([level, levelNodes]) => {
+      const sorted = [...levelNodes].sort((a, b) => b.outgoing - a.outgoing || b.count - a.count || a.label.localeCompare(b.label))
+      const y = maxLevel === 0
+        ? (padding.top + (height - padding.bottom)) / 2
+        : padding.top + (level / maxLevel) * (height - padding.top - padding.bottom)
+      const usableWidth = width - padding.left - padding.right
+
+      return sorted.map((node, index) => {
+        const x = sorted.length === 1
+          ? width / 2
+          : padding.left + (index / (sorted.length - 1)) * usableWidth
+
+        return {
+          ...node,
+          x,
+          y,
+        }
+      })
+    })
 }
 
 function formatJsonLike(value: unknown) {

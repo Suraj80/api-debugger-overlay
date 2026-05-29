@@ -19,6 +19,22 @@ const MAX_FINGERPRINTS = 1000
 const seenFingerprints = new Set()
 const pendingObservedRequests = []
 const MATCH_WINDOW_MS = 5000
+const bridgeConfig = readBridgeConfig()
+
+function readBridgeConfig() {
+  const currentScript = document.currentScript
+  const config = currentScript && currentScript.__apiDebuggerBridgeConfig
+
+  if (
+    !config ||
+    typeof config.replayEventType !== 'string' ||
+    typeof config.replayToken !== 'string'
+  ) {
+    return null
+  }
+
+  return config
+}
 
 function addFingerprint(fp) {
   if (seenFingerprints.size >= MAX_FINGERPRINTS) {
@@ -306,11 +322,19 @@ window.addEventListener('message', (event) => {
       ...(event.data.payload || {}),
     }
   }
-
-  if (event.data?.type === 'API_DEBUGGER_REPLAY') {
-    replayRequest(event.data.requestId, event.data.payload)
-  }
 })
+
+if (bridgeConfig?.replayEventType && document.documentElement) {
+  document.documentElement.addEventListener(bridgeConfig.replayEventType, (event) => {
+    const detail = event?.detail
+
+    if (!detail || detail.token !== bridgeConfig.replayToken) return
+    if (typeof detail.requestId !== 'string' || !detail.requestId) return
+    if (!detail.payload || typeof detail.payload !== 'object') return
+
+    replayRequest(detail.requestId, detail.payload)
+  })
+}
 
 function getBodySize(body) {
   if (!body) return 0

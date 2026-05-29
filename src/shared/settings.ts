@@ -67,12 +67,11 @@ function base64ToBytes(value: string) {
   return bytes
 }
 
-async function getApiKeyEncryptionKey(includeUserAgent = false) {
+async function getApiKeyEncryptionKey(version = API_KEY_ENCRYPTION_VERSION) {
   const encoder = new TextEncoder()
   const extensionId = chrome.runtime?.id ?? 'api-debugger'
-  const userAgent = globalThis.navigator?.userAgent ?? 'unknown-runtime'
-  const keySeed = includeUserAgent
-    ? `${extensionId}:api-debugger-overlay:${userAgent}`
+  const keySeed = version === LEGACY_API_KEY_ENCRYPTION_VERSION
+    ? `${extensionId}:api-debugger-overlay:${globalThis.navigator?.userAgent ?? 'unknown-runtime'}`
     : `${extensionId}:api-debugger-overlay`
   const keyMaterial = await crypto.subtle.digest(
     'SHA-256',
@@ -112,7 +111,7 @@ export async function decryptApiKey(encrypted: EncryptedApiKey | undefined): Pro
   }
 
   try {
-    const key = await getApiKeyEncryptionKey(encrypted.version === LEGACY_API_KEY_ENCRYPTION_VERSION)
+    const key = await getApiKeyEncryptionKey(encrypted.version)
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: base64ToBytes(encrypted.iv) },
       key,

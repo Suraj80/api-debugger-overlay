@@ -33,6 +33,47 @@ function installChromeMock(syncStore: Store, localStore: Store) {
   })
 }
 
+function setUserAgent(userAgent: string) {
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { userAgent },
+    configurable: true,
+  })
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = ''
+  bytes.forEach(byte => {
+    binary += String.fromCharCode(byte)
+  })
+
+  return btoa(binary)
+}
+
+async function createLegacyEncryptedApiKey(apiKey: string, userAgent: string) {
+  const encoder = new TextEncoder()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const keySeed = `test-extension-id:api-debugger-overlay:${userAgent}`
+  const keyMaterial = await crypto.subtle.digest('SHA-256', encoder.encode(keySeed))
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  )
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encoder.encode(apiKey),
+  )
+
+  return {
+    version: 1,
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+  }
+}
+
 describe('settings secret storage', () => {
   let syncStore: Store
   let localStore: Store
@@ -42,6 +83,7 @@ describe('settings secret storage', () => {
     syncStore = {}
     localStore = {}
     installChromeMock(syncStore, localStore)
+    setUserAgent('Chrome/126.0.0.0')
   })
 
   it('encrypts the API key in local storage and restores it on read', async () => {
@@ -93,5 +135,53 @@ describe('settings secret storage', () => {
     expect(migratedSecretSettings.apiKey).toBeUndefined()
     expect(migratedSecretSettings.apiKeyEncrypted?.ciphertext).toBeTypeOf('string')
     expect(settings.captureEnabled).toBe(DEFAULT_SETTINGS.captureEnabled)
+  })
+
+  it('keeps version 2 encrypted API keys readable after the userAgent changes', async () => {
+    const {
+      API_DEBUGGER_SECRET_SETTINGS_KEY,
+      DEFAULT_SETTINGS,
+      getSettings,
+      saveSettings,
+    } = await import('../../src/shared/settings')
+
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      apiKey: 'sk-ant-version-2',
+    })
+
+    const savedSecretSettings = localStore[API_DEBUGGER_SECRET_SETTINGS_KEY] as {
+      apiKeyEncrypted?: { version: number }
+    }
+    expect(savedSecretSettings.apiKeyEncrypted?.version).toBe(2)
+
+    setUserAgent('Chrome/127.0.0.0')
+
+    const settings = await getSettings()
+    expect(settings.apiKey).toBe('sk-ant-version-2')
+  })
+
+  it('migrates legacy userAgent-bound encrypted keys to version 2', async () => {
+    const {
+      API_DEBUGGER_SECRET_SETTINGS_KEY,
+      getSettings,
+    } = await import('../../src/shared/settings')
+
+    localStore[API_DEBUGGER_SECRET_SETTINGS_KEY] = {
+      apiKeyEncrypted: await createLegacyEncryptedApiKey('sk-ant-legacy-encrypted', 'Chrome/126.0.0.0'),
+    }
+
+    const migrated = await getSettings()
+    expect(migrated.apiKey).toBe('sk-ant-legacy-encrypted')
+
+    setUserAgent('Chrome/127.0.0.0')
+
+    const migratedSecretSettings = localStore[API_DEBUGGER_SECRET_SETTINGS_KEY] as {
+      apiKeyEncrypted?: { version: number }
+    }
+    expect(migratedSecretSettings.apiKeyEncrypted?.version).toBe(2)
+
+    const afterUserAgentChange = await getSettings()
+    expect(afterUserAgentChange.apiKey).toBe('sk-ant-legacy-encrypted')
   })
 })

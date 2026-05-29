@@ -9,6 +9,12 @@ import type { OverlayStateSnapshot, ReplayRequest, ReplayResult } from '../share
 
 const replayRequests = new Map<string, (result: ReplayResult) => void>()
 let settingsUpdater: ((s: ApiDebuggerSettings) => void) | null = null
+const INJECTED_BRIDGE_CONFIG_PROP = '__apiDebuggerBridgeConfig'
+
+interface InjectedBridgeConfig {
+  replayEventType: string
+  replayToken: string
+}
 
 export function App({ initialPaused }: { initialPaused: boolean }) {
   const updateSettings = useUpdateSettings()
@@ -29,6 +35,27 @@ function postSettingsToPage(settings: ApiDebuggerSettings) {
     type: 'API_DEBUGGER_SETTINGS',
     payload: settings,
   }, '*')
+}
+
+function createInjectedBridgeConfig(): InjectedBridgeConfig {
+  return {
+    replayEventType: `api-debugger:replay:${crypto.randomUUID()}`,
+    replayToken: crypto.randomUUID(),
+  }
+}
+
+function dispatchReplayToPage(
+  bridgeConfig: InjectedBridgeConfig,
+  requestId: string,
+  payload: ReplayRequest,
+) {
+  document.documentElement.dispatchEvent(new CustomEvent(bridgeConfig.replayEventType, {
+    detail: {
+      token: bridgeConfig.replayToken,
+      requestId,
+      payload,
+    },
+  }))
 }
 
 function waitForDocumentElement() {
@@ -77,9 +104,13 @@ async function start() {
   }
 
   // 1. Inject the fetch interceptor into page context
+  const bridgeConfig = createInjectedBridgeConfig()
   const script = document.createElement('script')
   try {
     script.src = chrome.runtime.getURL('src/injected/index.js')
+    ;(script as HTMLScriptElement & { [INJECTED_BRIDGE_CONFIG_PROP]?: InjectedBridgeConfig })[
+      INJECTED_BRIDGE_CONFIG_PROP
+    ] = bridgeConfig
   } catch {
     return
   }
@@ -139,12 +170,7 @@ async function start() {
           sendResponse(result)
         })
 
-        window.postMessage({
-          source: 'api-debugger-content',
-          type: 'API_DEBUGGER_REPLAY',
-          requestId,
-          payload: message.payload as ReplayRequest,
-        }, '*')
+        dispatchReplayToPage(bridgeConfig, requestId, message.payload as ReplayRequest)
 
         return true
       })

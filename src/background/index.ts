@@ -15,7 +15,7 @@ import { getSettings } from '../shared/settings'
 // MV3 service worker - no DOM, no window object
 // Central message hub and in-memory session store for the extension
 
-const MAX_REQUESTS_PER_TAB = 100
+const MAX_REQUESTS_PER_TAB = 500
 const MAX_NETWORK_EVENTS_PER_TAB = 200
 const NETWORK_MATCH_WINDOW_MS = 5000
 const PENDING_REQUEST_FALLBACK_MS = 1000

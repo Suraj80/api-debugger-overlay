@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "114",
   "name": "API Debugger Overlay",
   "version": "1.0.0",
   "description": "Real-time API debugging directly on any webpage",
