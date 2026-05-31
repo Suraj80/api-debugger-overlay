@@ -82,4 +82,23 @@ describe('background AI helpers', () => {
     expect(prompt).toContain('called 3 times')
     expect(prompt).toContain('dependency chain')
   })
+
+  it('parses text from a raw Responses API output array', async () => {
+    const { parseOpenAiText } = await import('../../src/background/index')
+
+    const text = parseOpenAiText({
+      output: [
+        {
+          type: 'message',
+          content: [
+            { type: 'output_text', text: 'Likely caused by repeated auth revalidation.' },
+            { type: 'output_text', text: 'Cache the user state request for this route.' },
+          ],
+        },
+      ],
+    })
+
+    expect(text).toContain('repeated auth revalidation')
+    expect(text).toContain('Cache the user state request')
+  })
 })

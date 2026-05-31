@@ -81,7 +81,7 @@ export function Popup() {
   const testConnection = async () => {
     if (!apiKey.trim()) {
       setTestState('err')
-      setTestMessage('Enter an Anthropic API key before testing the connection.')
+      setTestMessage('Enter an OpenAI API key before testing the connection.')
       return
     }
 
@@ -109,10 +109,10 @@ export function Popup() {
       }
 
       setTestState('err')
-      setTestMessage(response?.error ?? 'Unable to connect to Anthropic.')
+      setTestMessage(response?.error ?? 'Unable to connect to OpenAI.')
     } catch (error) {
       setTestState('err')
-      setTestMessage(error instanceof Error ? error.message : 'Unable to connect to Anthropic.')
+      setTestMessage(error instanceof Error ? error.message : 'Unable to connect to OpenAI.')
     }
   }
 
@@ -184,7 +184,7 @@ export function Popup() {
 
         <Section title="AI Integration">
           <div>
-            <div className="api-popup-field-label">Anthropic API Key</div>
+            <div className="api-popup-field-label">OpenAI API Key</div>
             <div className="api-popup-input-wrap">
               <input
                 className="api-popup-key-input"
@@ -197,7 +197,7 @@ export function Popup() {
                 {showKey ? 'Hide' : 'Show'}
               </button>
             </div>
-            <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.anthropic.com.</div>
+            <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.openai.com.</div>
             <button
               className={`api-popup-test${testState === 'ok' ? ' is-ok' : ''}${testState === 'err' ? ' is-err' : ''}`}
               onClick={testConnection}

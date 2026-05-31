@@ -829,8 +829,14 @@ function StatusBadge({ status }: { status: number }) {
   return <span className="apidbg-status" style={{ '--badge-color': color } as React.CSSProperties}>{status || '-'}</span>
 }
 
+function latencyColor(ms: number) {
+  if (ms < 300) return 'var(--api-success)'
+  if (ms <= 800) return 'var(--api-warning)'
+  return 'var(--api-danger)'
+}
+
 function Duration({ ms }: { ms: number }) {
-  const color = ms >= 1500 ? 'var(--api-danger)' : ms >= 500 ? 'var(--api-warning)' : 'var(--api-success)'
+  const color = latencyColor(ms)
   const display = ms > 999 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 
   return <span className="apidbg-duration" style={{ '--badge-color': color } as React.CSSProperties}>{display}</span>
@@ -1669,7 +1675,7 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
   const dupes = requests.filter(r => r.isDuplicate).length
   const isCapturing = effectiveState !== 'paused'
   const showSparkline = requests.length >= 3
-  const avgColor = avg < 500 ? 'var(--api-success)' : avg < 1500 ? 'var(--api-warning)' : 'var(--api-danger)'
+  const avgColor = latencyColor(avg)
   const errColor = errorRate === 0 ? 'var(--api-success)' : errorRate <= 5 ? 'var(--api-warning)' : 'var(--api-danger)'
   const overlayPositionClass = positionClass(settings.overlayPosition)
 

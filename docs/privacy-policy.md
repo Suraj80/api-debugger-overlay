@@ -29,7 +29,7 @@ When the optional precise timing mode is enabled, the extension may also use Chr
 ## What is stored
 
 - General extension settings are stored in `chrome.storage.sync`.
-- The optional Anthropic API key is stored encrypted in `chrome.storage.local`.
+- The optional OpenAI API key is stored encrypted in `chrome.storage.local`.
 - Captured session data is kept in in-memory per-tab session state and is not written to extension storage unless the user explicitly exports a report.
 
 ## External services
@@ -38,7 +38,7 @@ No captured request data is sent to external services unless the user explicitly
 
 When an AI feature is used:
 
-- the extension may send either a minimal test request or sanitized request context to `api.anthropic.com`
+- the extension may send either a minimal test request or sanitized request context to `api.openai.com`
 - sensitive query parameters such as tokens, keys, passwords, auth values, and sessions are removed from the AI prompt
 - path segments that look like identifiers may be generalized before sending
 

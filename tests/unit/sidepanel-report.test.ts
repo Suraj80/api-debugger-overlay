@@ -144,6 +144,22 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('2 call chain(s)')
   })
 
+  it('limits the dependency graph to the latest 50 requests', async () => {
+    const { buildDependencySvg } = await import('../../src/sidepanel/index')
+
+    const requests = Array.from({ length: 51 }, (_, index) => createRequest({
+      id: `request-${index}`,
+      url: `https://api.example.com/chain/${index}`,
+      dependsOn: index === 0 ? [] : [`request-${index - 1}`],
+      duration: 150 + index,
+    }))
+
+    const html = buildDependencySvg(requests)
+
+    expect(html).toContain('/chain/50')
+    expect(html).not.toContain('/chain/0 - 1 captured call(s)')
+  })
+
   it('marks additions and deletions in replay diffs', async () => {
     const { computeDiff } = await import('../../src/sidepanel/index')
 

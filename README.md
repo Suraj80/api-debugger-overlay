@@ -16,7 +16,7 @@ The project has the core extension scaffold and the major PRD feature set implem
 - Side panel with session dashboard, latency chart, dependency graph view, and request replay view.
 - Request replay routed back through the original tab context so cookies/session state are preserved.
 - AI suggestion requests routed through the background service worker with sanitization and rate limiting.
-- Anthropic API key stored encrypted in `chrome.storage.local`, with migration from earlier plaintext storage.
+- OpenAI API key stored encrypted in `chrome.storage.local`, with migration from earlier plaintext storage.
 - Vitest and Playwright coverage for settings encryption, AI prompt sanitization, session handling, export helpers, and core extension flows.
 
 Remaining work is mostly release polish:
@@ -121,7 +121,7 @@ Captured request data is processed locally in memory for the current tab session
 
 The popup stores regular settings in `chrome.storage.sync` and stores the optional API key encrypted in `chrome.storage.local`.
 
-No request data is sent to external services unless the user explicitly clicks `Ask AI`. In that case, sanitized request context is sent from the background service worker to `api.anthropic.com`, subject to a local rate limit.
+No request data is sent to external services unless the user explicitly clicks `Ask AI`. In that case, sanitized request context is sent from the background service worker to `api.openai.com`, subject to a local rate limit.
 
 ## PRD Alignment
 

@@ -49,4 +49,4 @@ This project now supports a simple release flow:
 
 - The project uses Manifest V3 and a background service worker.
 - Session data is kept in memory per tab and cleared on tab close/navigation.
-- Anthropic requests occur only after a user clicks `Ask AI`.
+- OpenAI requests occur only after a user clicks `Ask AI`.

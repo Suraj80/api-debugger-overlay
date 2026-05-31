@@ -26,6 +26,7 @@ type DependencyGraphLayoutNode = DependencyGraphNode & {
   x: number
   y: number
 }
+const MAX_DEPENDENCY_GRAPH_REQUESTS = 50
 type SessionUpdatedMessage = {
   type: 'SESSION_UPDATED'
   tabId: number
@@ -201,7 +202,7 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
   const errors = requests.filter(r => r.status >= 400).length
   const errorRate = total ? Math.round((errors / total) * 1000) / 10 : 0
   const perMin = Math.round(total * 1.2)
-  const avgColor = avg < 500 ? 'var(--api-success)' : avg < 1500 ? 'var(--api-warning)' : 'var(--api-danger)'
+  const avgColor = latencyColor(avg)
   const errColor = errorRate === 0 ? 'var(--api-success)' : errorRate <= 5 ? 'var(--api-warning)' : 'var(--api-danger)'
 
   const byEndpoint = new Map<string, { method: string; url: string; total: number; ttfbTotal: number; ttfbCount: number; count: number }>()
@@ -251,7 +252,7 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
             <span style={{ color: 'var(--api-text-subtle)', fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>
               TTFB {entry.avgTtfb > 0 ? formatMs(entry.avgTtfb) : '-'}
             </span>
-            <span style={{ color: 'var(--api-danger)', fontSize: 12, fontWeight: 750 }}>{formatMs(entry.avg)}</span>
+            <span style={{ color: latencyColor(entry.avg), fontSize: 12, fontWeight: 750 }}>{formatMs(entry.avg)}</span>
           </div>
         ))}
       </section>
@@ -1407,11 +1408,12 @@ export function buildDependencySvg(requests: RequestEntry[]) {
 }
 
 function buildDependencyGraph(requests: RequestEntry[]) {
-  const requestById = new Map(requests.map(request => [request.id, request]))
+  const graphRequests = requests.slice(-MAX_DEPENDENCY_GRAPH_REQUESTS)
+  const requestById = new Map(graphRequests.map(request => [request.id, request]))
   const nodeMap = new Map<string, { id: string; label: string; count: number }>()
   const edgeMap = new Map<string, DependencyGraphEdge>()
 
-  requests.forEach(request => {
+  graphRequests.forEach(request => {
     const path = getPath(request.url)
     const entry = nodeMap.get(path) ?? {
       id: path,
@@ -1422,7 +1424,7 @@ function buildDependencyGraph(requests: RequestEntry[]) {
     nodeMap.set(path, entry)
   })
 
-  requests.forEach(request => {
+  graphRequests.forEach(request => {
     const to = getPath(request.url)
     request.dependsOn.forEach(sourceId => {
       const source = requestById.get(sourceId)
@@ -1676,8 +1678,8 @@ function formatBytes(bytes: number) {
 }
 
 function latencyColor(ms: number) {
-  if (ms < 500) return '#22C55E'
-  if (ms < 1500) return '#F59E0B'
+  if (ms < 300) return '#22C55E'
+  if (ms <= 800) return '#F59E0B'
   return '#EF4444'
 }
 

@@ -22,11 +22,9 @@ const PENDING_REQUEST_FALLBACK_MS = 1000
 const PENDING_REQUEST_CLEANUP_MS = 5000
 const CDP_MATCH_WINDOW_MS = 5000
 const AI_RATE_LIMIT_MS = 10000
-const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
-const ANTHROPIC_VERSION = '2023-06-01'
-const ANTHROPIC_BROWSER_ACCESS_HEADER = 'anthropic-dangerous-direct-browser-access'
-const AI_MODEL = 'claude-sonnet-4-20250514'
-const AI_TEST_MODEL = 'claude-haiku-4-5-20251001'
+const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
+const AI_MODEL = 'gpt-5.4-mini'
+const AI_TEST_MODEL = 'gpt-5.4-mini'
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayRequest>()
@@ -504,24 +502,48 @@ export function buildAiSuggestionPrompt(request: AISuggestionRequest) {
   ].filter(Boolean).join('\n')
 }
 
-function parseAnthropicText(data: unknown) {
-  const content = (data as { content?: Array<{ text?: string }> }).content
-  return content?.find(item => typeof item.text === 'string')?.text ?? ''
+export function parseOpenAiText(data: unknown) {
+  const response = data as {
+    output_text?: unknown
+    output?: Array<{
+      type?: unknown
+      content?: Array<{
+        type?: unknown
+        text?: unknown
+      }>
+    }>
+  }
+
+  if (typeof response.output_text === 'string' && response.output_text.trim()) {
+    return response.output_text
+  }
+
+  const parts = response.output
+    ?.flatMap(item => {
+      if (item?.type !== 'message' || !Array.isArray(item.content)) return []
+
+      return item.content.flatMap(contentItem => (
+        contentItem?.type === 'output_text' && typeof contentItem.text === 'string'
+          ? [contentItem.text]
+          : []
+      ))
+    })
+    .filter(Boolean) ?? []
+
+  return parts.join('\n').trim()
 }
 
-async function getAnthropicApiKey() {
+async function getOpenAiApiKey() {
   const settings = await getSettings()
   return settings.apiKey.trim()
 }
 
-async function callAnthropic(apiKey: string, body: object) {
-  const response = await fetch(ANTHROPIC_MESSAGES_URL, {
+async function callOpenAi(apiKey: string, body: object) {
+  const response = await fetch(OPENAI_RESPONSES_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-      [ANTHROPIC_BROWSER_ACCESS_HEADER]: 'true',
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
   })
@@ -535,31 +557,31 @@ async function callAnthropic(apiKey: string, body: object) {
 }
 
 async function testAiConnection(): Promise<AISuggestionResponse> {
-  const apiKey = await getAnthropicApiKey()
+  const apiKey = await getOpenAiApiKey()
   if (!apiKey) {
-    return { ok: false, error: 'API key not configured. Add your Anthropic key in settings.' }
+    return { ok: false, error: 'API key not configured. Add your OpenAI key in settings.' }
   }
 
   try {
-    await callAnthropic(apiKey, {
+    await callOpenAi(apiKey, {
       model: AI_TEST_MODEL,
-      max_tokens: 1,
-      messages: [{ role: 'user', content: 'hi' }],
+      input: 'hi',
+      max_output_tokens: 20,
     })
 
     return { ok: true }
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : 'Unable to connect to Anthropic.',
+      error: error instanceof Error ? error.message : 'Unable to connect to OpenAI.',
     }
   }
 }
 
 async function requestAiSuggestion(request: AISuggestionRequest): Promise<AISuggestionResponse> {
-  const apiKey = await getAnthropicApiKey()
+  const apiKey = await getOpenAiApiKey()
   if (!apiKey) {
-    return { ok: false, error: 'API key not configured. Add your Anthropic key in settings.' }
+    return { ok: false, error: 'API key not configured. Add your OpenAI key in settings.' }
   }
 
   const now = Date.now()
@@ -575,12 +597,12 @@ async function requestAiSuggestion(request: AISuggestionRequest): Promise<AISugg
   lastAiRequestAt = now
 
   try {
-    const data = await callAnthropic(apiKey, {
+    const data = await callOpenAi(apiKey, {
       model: AI_MODEL,
-      max_tokens: 300,
-      messages: [{ role: 'user', content: buildAiSuggestionPrompt(request) }],
+      input: buildAiSuggestionPrompt(request),
+      max_output_tokens: 200,
     })
-    const suggestion = parseAnthropicText(data)
+    const suggestion = parseOpenAiText(data)
     const finalSuggestion = suggestion || 'No suggestion returned.'
 
     await persistAiSuggestionForRequest(request.id, finalSuggestion)
