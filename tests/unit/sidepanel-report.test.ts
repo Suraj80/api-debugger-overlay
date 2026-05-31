@@ -144,7 +144,7 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('2 call chain(s)')
   })
 
-  it('limits the dependency graph to the latest 50 requests', async () => {
+  it('limits the dependency graph to the first 50 requests in the session', async () => {
     const { buildDependencySvg } = await import('../../src/sidepanel/index')
 
     const requests = Array.from({ length: 51 }, (_, index) => createRequest({
@@ -156,8 +156,9 @@ describe('sidepanel reporting helpers', () => {
 
     const html = buildDependencySvg(requests)
 
-    expect(html).toContain('/chain/50')
-    expect(html).not.toContain('/chain/0 - 1 captured call(s)')
+    expect(html).toContain('/chain/0')
+    expect(html).toContain('/chain/49')
+    expect(html).not.toContain('/chain/50')
   })
 
   it('marks additions and deletions in replay diffs', async () => {

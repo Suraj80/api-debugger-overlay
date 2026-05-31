@@ -1360,15 +1360,12 @@ export function buildDependencySvg(requests: RequestEntry[]) {
     const endRadius = Math.min(20, 8 + end.count * 1.5)
     const startY = start.y + startRadius
     const endY = end.y - endRadius
-    const midX = (start.x + end.x) / 2
-    const midY = (startY + endY) / 2
     const curveY = startY + (endY - startY) * 0.45
 
     return `<g>
       <path d="M ${start.x.toFixed(1)} ${startY.toFixed(1)} C ${start.x.toFixed(1)} ${curveY.toFixed(1)} ${end.x.toFixed(1)} ${(curveY + 14).toFixed(1)} ${end.x.toFixed(1)} ${endY.toFixed(1)}" fill="none" stroke="${latencyColor(edge.latency)}" stroke-width="${Math.min(4, 1.2 + edge.count * 0.5).toFixed(1)}" marker-end="url(#report-arrow)" opacity="0.88">
         <title>${escapeHtml(`${getEndpointLabel(edge.from)} -> ${getEndpointLabel(edge.to)} - ${edge.count} call chain(s), avg ${formatMs(edge.latency)}`)}</title>
       </path>
-      <text x="${midX.toFixed(1)}" y="${(midY - 5).toFixed(1)}" fill="#9c96a6" font-size="9" text-anchor="middle">${formatMs(edge.latency)}</text>
     </g>`
   }).join('')
   const nodeMarkup = nodes.map(node => {
@@ -1383,7 +1380,6 @@ export function buildDependencySvg(requests: RequestEntry[]) {
       <circle cx="${(position.x + nodeRadius - 2).toFixed(1)}" cy="${(position.y - nodeRadius + 2).toFixed(1)}" r="8" fill="#8069bf" stroke="#121015" stroke-width="1.5" />
       <text x="${(position.x + nodeRadius - 2).toFixed(1)}" y="${(position.y - nodeRadius + 5).toFixed(1)}" fill="#eee8f5" font-size="8" font-weight="800" text-anchor="middle">${count}</text>
       <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 16).toFixed(1)}" fill="#eee8f5" font-size="10" font-weight="700" text-anchor="middle">${escapeHtml(trimMiddle(node.label, 26))}</text>
-      <text x="${position.x.toFixed(1)}" y="${(position.y + nodeRadius + 29).toFixed(1)}" fill="#79737f" font-size="9" text-anchor="middle">${escapeHtml(trimMiddle(node.id, 34))}</text>
     </g>`
   }).join('')
 
@@ -1395,7 +1391,7 @@ export function buildDependencySvg(requests: RequestEntry[]) {
     </defs>
     <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="#18151d" />
     <text x="18" y="24" fill="#eee8f5" font-size="13" font-weight="800">Inferred API dependencies</text>
-    <text x="18" y="41" fill="#79737f" font-size="10">Grouped by endpoint path. Only connected endpoints are shown. Edge labels show downstream average latency.</text>
+    <text x="18" y="41" fill="#79737f" font-size="10">Grouped by endpoint path. Only connected endpoints are shown.</text>
     <g transform="translate(${width - 380}, 26)" font-size="10" fill="#9c96a6">
       <line x1="0" y1="0" x2="22" y2="0" stroke="#22C55E" stroke-width="2" /><text x="30" y="4">Fast</text>
       <line x1="86" y1="0" x2="108" y2="0" stroke="#F59E0B" stroke-width="2" /><text x="116" y="4">500ms+</text>
@@ -1408,7 +1404,7 @@ export function buildDependencySvg(requests: RequestEntry[]) {
 }
 
 function buildDependencyGraph(requests: RequestEntry[]) {
-  const graphRequests = requests.slice(-MAX_DEPENDENCY_GRAPH_REQUESTS)
+  const graphRequests = requests.slice(0, MAX_DEPENDENCY_GRAPH_REQUESTS)
   const requestById = new Map(graphRequests.map(request => [request.id, request]))
   const nodeMap = new Map<string, { id: string; label: string; count: number }>()
   const edgeMap = new Map<string, DependencyGraphEdge>()

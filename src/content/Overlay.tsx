@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { AISuggestionResponse, RequestEntry } from '../shared/types'
-import type { ApiDebuggerSettings } from '../shared/settings'
-import { useSettings } from '../shared/SettingsContext'
+import { saveSettings, type ApiDebuggerSettings } from '../shared/settings'
+import { useSettings, useUpdateSettings } from '../shared/SettingsContext'
 import { sendRuntimeMessage } from '../shared/sendMessage'
 
 interface RequestCompleteMessage {
@@ -1579,12 +1579,14 @@ function positionClass(position: ApiDebuggerSettings['overlayPosition']) {
 
 function getInitialOverlayState(settings: ApiDebuggerSettings, initialPaused: boolean): OverlayState {
   if (!settings.captureEnabled) return 'hidden'
+  if (!settings.showOverlayOnLoad) return 'minimised'
   if (initialPaused) return 'paused'
-  return settings.showOverlayOnLoad ? 'feed' : 'minimised'
+  return 'feed'
 }
 
 export function Overlay({ initialPaused }: { initialPaused: boolean }) {
   const settings = useSettings()
+  const updateSettings = useUpdateSettings()
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [state, setState] = useState<OverlayState>(() => getInitialOverlayState(settings, initialPaused))
   const [sweep, setSweep] = useState(false)
@@ -1592,6 +1594,7 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
     ? 'hidden'
     : (state === 'hidden' ? getInitialOverlayState({ ...settings, captureEnabled: true }, initialPaused) : state)
   const stateRef = useRef<OverlayState>(state)
+  const pausedRef = useRef(initialPaused)
   const bufferedRequestsRef = useRef<RequestEntry[]>([])
 
   const upsertRequest = (currentRequests: RequestEntry[], nextRequest: RequestEntry) => {
@@ -1683,7 +1686,25 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
     void sendRuntimeMessage({ type: 'OPEN_SIDE_PANEL' })
   }
 
+  const expandOverlay = () => {
+    setState(pausedRef.current ? 'paused' : 'feed')
+    persistShowOnLoad(true)
+  }
+
+  const persistShowOnLoad = (showOverlayOnLoad: boolean) => {
+    const nextSettings = {
+      ...settings,
+      showOverlayOnLoad,
+    }
+
+    updateSettings(nextSettings)
+    void saveSettings(nextSettings).catch(() => {
+      // Ignore transient extension storage errors during reloads.
+    })
+  }
+
   const setPausedState = (paused: boolean) => {
+    pausedRef.current = paused
     setState(paused ? 'paused' : 'feed')
     void sendRuntimeMessage({
       type: 'SET_OVERLAY_PAUSED',
@@ -1699,7 +1720,10 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
     return (
       <>
         <style>{overlayThemeCss}</style>
-        <button className={`apidbg-minimised ${overlayPositionClass}`} onClick={() => setState('feed')}>
+        <button
+          className={`apidbg-minimised ${overlayPositionClass}`}
+          onClick={expandOverlay}
+        >
           <LiveDot isCapturing />
           <span>API</span>
           <span style={{ color: 'var(--api-text-subtle)', fontSize: 10 }}>^</span>
@@ -1735,12 +1759,15 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
               >
                 <SidePanelIcon />
               </button>
-              <button
-                className="apidbg-icon-button"
-                onClick={() => setState('minimised')}
-                aria-label="Minimise overlay"
-                title="Minimise"
-              >
+                <button
+                  className="apidbg-icon-button"
+                  onClick={() => {
+                    setState('minimised')
+                    persistShowOnLoad(false)
+                  }}
+                  aria-label="Minimise overlay"
+                  title="Minimise"
+                >
                 <MinimiseIcon />
               </button>
             </div>

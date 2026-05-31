@@ -15,7 +15,6 @@ export interface ApiDebuggerSettings {
 export const API_DEBUGGER_SETTINGS_KEY = 'apiDebuggerSettings'
 export const API_DEBUGGER_SECRET_SETTINGS_KEY = 'apiDebuggerSecretSettings'
 const API_KEY_ENCRYPTION_VERSION = 2
-const LEGACY_API_KEY_ENCRYPTION_VERSION = 1
 
 interface EncryptedApiKey {
   version: number
@@ -70,12 +69,9 @@ function base64ToBytes(value: string) {
 async function getApiKeyEncryptionKey(version = API_KEY_ENCRYPTION_VERSION) {
   const encoder = new TextEncoder()
   const extensionId = chrome.runtime?.id ?? 'api-debugger'
-  const keySeed = version === LEGACY_API_KEY_ENCRYPTION_VERSION
-    ? `${extensionId}:api-debugger-overlay:${globalThis.navigator?.userAgent ?? 'unknown-runtime'}`
-    : `${extensionId}:api-debugger-overlay`
   const keyMaterial = await crypto.subtle.digest(
     'SHA-256',
-    encoder.encode(keySeed),
+    encoder.encode(`${extensionId}:api-debugger-overlay`),
   )
 
   return crypto.subtle.importKey(
@@ -106,12 +102,12 @@ export async function encryptApiKey(apiKey: string): Promise<EncryptedApiKey> {
 
 export async function decryptApiKey(encrypted: EncryptedApiKey | undefined): Promise<string> {
   if (!encrypted) return ''
-  if (encrypted.version !== API_KEY_ENCRYPTION_VERSION && encrypted.version !== LEGACY_API_KEY_ENCRYPTION_VERSION) {
+  if (encrypted.version !== API_KEY_ENCRYPTION_VERSION) {
     return ''
   }
 
   try {
-    const key = await getApiKeyEncryptionKey(encrypted.version)
+    const key = await getApiKeyEncryptionKey()
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: base64ToBytes(encrypted.iv) },
       key,
@@ -144,8 +140,7 @@ export async function getSettings(): Promise<ApiDebuggerSettings> {
     legacyLocalSettings ||
     secretSettings?.apiKey ||
     syncedSettings?.apiKey ||
-    (secretSettings && !secretSettings.apiKeyEncrypted) ||
-    (secretSettings?.apiKeyEncrypted && secretSettings.apiKeyEncrypted.version !== API_KEY_ENCRYPTION_VERSION),
+    (secretSettings && !secretSettings.apiKeyEncrypted)
   )
 
   if (needsMigration) {
