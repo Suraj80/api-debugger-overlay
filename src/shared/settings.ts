@@ -66,7 +66,7 @@ function base64ToBytes(value: string) {
   return bytes
 }
 
-async function getApiKeyEncryptionKey(version = API_KEY_ENCRYPTION_VERSION) {
+async function getApiKeyEncryptionKey() {
   const encoder = new TextEncoder()
   const extensionId = chrome.runtime?.id ?? 'api-debugger'
   const keyMaterial = await crypto.subtle.digest(
