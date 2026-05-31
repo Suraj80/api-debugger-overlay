@@ -4,6 +4,7 @@ import type { Root } from 'react-dom/client'
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '../shared/settings'
 import type { AISuggestionResponse } from '../shared/types'
 import '../index.css'
+import brandIcon from '../../icons/favicon-32x32.png'
 
 type TestState = 'idle' | 'loading' | 'ok' | 'err'
 
@@ -134,12 +135,7 @@ export function Popup() {
     <div className="api-theme-shell api-popup">
       <header className="api-popup-header">
         <div className="api-popup-brand">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M2 12 Q 7 4 12 12 T 22 12" />
-            <circle cx="6" cy="12" r="1.5" fill="currentColor" />
-            <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-            <circle cx="18" cy="12" r="1.5" fill="currentColor" />
-          </svg>
+          <img src={brandIcon} alt="" className="api-popup-brand-icon" />
           <span>API Debugger</span>
         </div>
         <span className={`api-popup-status${loaded && capturing ? ' is-capturing' : ''}`}>

@@ -4,6 +4,12 @@
   "name": "API Debugger Overlay",
   "version": "1.0.0",
   "description": "Real-time API debugging directly on any webpage",
+  "icons": {
+    "16": "icons/favicon-16x16.png",
+    "32": "icons/favicon-32x32.png",
+    "192": "icons/android-chrome-192x192.png",
+    "512": "icons/android-chrome-512x512.png"
+  },
 
   "permissions": ["storage", "scripting", "activeTab", "sidePanel", "webRequest", "downloads", "debugger"],
   "host_permissions": ["<all_urls>"],
@@ -21,7 +27,10 @@
 
   "action": {
     "default_popup": "src/popup/index.html",
-    "default_icon": { "32": "icons/icon32.png" }
+    "default_icon": {
+      "16": "icons/favicon-16x16.png",
+      "32": "icons/favicon-32x32.png"
+    }
   },
 
   "side_panel": {

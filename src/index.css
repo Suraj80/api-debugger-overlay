@@ -95,9 +95,11 @@
   font-weight: 750;
 }
 
-.api-popup-brand svg {
+.api-popup-brand-icon {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
-  color: var(--api-color-primary-soft);
+  border-radius: 4px;
 }
 
 .api-popup-status {
@@ -367,22 +369,6 @@
   overflow: hidden;
 }
 
-.api-sidepanel-header {
-  display: flex;
-  height: 48px;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--api-border);
-  padding: 0 16px;
-}
-
-.api-sidepanel-title {
-  font-size: 14px;
-  font-weight: 750;
-}
-
-.api-sidepanel-close,
 .api-sidepanel-plain {
   border: 0;
   background: none;
@@ -390,11 +376,6 @@
   cursor: pointer;
 }
 
-.api-sidepanel-close {
-  font-size: 18px;
-}
-
-.api-sidepanel-close:hover,
 .api-sidepanel-plain:hover {
   color: var(--api-color-primary-soft);
 }
