@@ -106,7 +106,7 @@ export type ExtensionMessage =
   | { type: 'SET_OVERLAY_PAUSED'; payload: { paused: boolean } }
   | { type: 'SET_PRECISE_MODE'; payload: { enabled: boolean } }
   | { type: 'ASK_AI_SUGGESTION'; payload: AISuggestionRequest }
-  | { type: 'TEST_AI_CONNECTION' }
+  | { type: 'TEST_AI_CONNECTION'; payload?: { apiKey?: string } }
   | { type: 'REQUEST_FAILED'; payload: { url: string; error: string } }
   | { type: 'CLEAR_SESSION' }
   | { type: 'GET_SESSION'; tabId?: number }
@@ -115,6 +115,9 @@ export type ExtensionMessage =
   | { type: 'SELECT_REPLAY'; payload: ReplayRequest }
   | { type: 'GET_REPLAY_TARGET'; tabId?: number }
   | { type: 'REPLAY_TARGET_SELECTED'; tabId: number; payload: ReplayRequest }
+  | { type: 'SELECT_REQUEST_DETAILS'; payload: { requestId: string } }
+  | { type: 'GET_REQUEST_DETAIL_TARGET'; tabId?: number }
+  | { type: 'REQUEST_DETAIL_SELECTED'; tabId: number; payload: { requestId: string } }
   | { type: 'REPLAY_PROGRESS'; tabId: number; payload: ReplayProgressPayload }
   | { type: 'RUN_REPLAY'; tabId: number; payload: ReplayRequest }
   | { type: 'EXECUTE_REPLAY'; payload: ReplayRequest }
@@ -129,6 +132,11 @@ export interface SessionSnapshot {
 export interface ReplayTargetSnapshot {
   tabId: number | null
   request: ReplayRequest | null
+}
+
+export interface RequestDetailTargetSnapshot {
+  tabId: number | null
+  requestId: string | null
 }
 
 export interface OverlayStateSnapshot {

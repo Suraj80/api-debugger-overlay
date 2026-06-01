@@ -421,6 +421,30 @@
   padding: 16px;
 }
 
+.api-sidepanel-card {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+  padding: 12px;
+}
+
+.api-sidepanel-card-title {
+  color: var(--api-text-subtle);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.api-secondary-button {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+  color: var(--api-text);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 10px 14px;
+}
+
 .api-stat-card {
   flex: 1;
   min-width: 0;

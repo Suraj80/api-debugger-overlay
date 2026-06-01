@@ -5,13 +5,14 @@ import type {
   ReplayAck,
   ReplayProgressPayload,
   ReplayRequest,
+  RequestDetailTargetSnapshot,
   ReplayTargetSnapshot,
   RequestEntry,
   SessionSnapshot,
   TimingSource,
   TimingUpdatePayload,
 } from '../shared/types'
-import { getSettings } from '../shared/settings'
+import { getSettings, saveSettings } from '../shared/settings'
 
 // MV3 service worker - no DOM, no window object
 // Central message hub and in-memory session store for the extension
@@ -29,6 +30,7 @@ const AI_TEST_MODEL = 'gpt-5.4-mini'
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayTargetState>()
+const requestDetailTargetsByTab = new Map<number, string>()
 const pausedOverlayTabs = new Set<number>()
 const requestReceivedAt = new Map<string, number>()
 const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
@@ -442,6 +444,25 @@ async function setPreciseMode(enabled: boolean) {
   }
 }
 
+async function ensurePreciseModeForTab(tabId: number | undefined) {
+  if (tabId == null) return
+
+  const settings = await getSettings()
+  if (!settings.preciseModeEnabled) return
+
+  await attachDebugger(tabId)
+}
+
+async function disablePreciseModeSetting() {
+  const settings = await getSettings()
+  if (!settings.preciseModeEnabled) return
+
+  await saveSettings({
+    ...settings,
+    preciseModeEnabled: false,
+  })
+}
+
 async function getOverlayStateSnapshot(tabId?: number): Promise<OverlayStateSnapshot> {
   const resolvedTabId = tabId ?? await getActiveTabId()
 
@@ -492,9 +513,12 @@ export function sanitizeUrlForAi(url: string) {
 
 export function buildAiSuggestionPrompt(request: AISuggestionRequest) {
   const sanitizedUrl = sanitizeUrlForAi(request.url)
+  const isProblemRequest = request.isSlow || request.status === 0 || request.status >= 400
 
   return [
-    `An API request was flagged as ${request.isSlow ? 'slow' : 'failed'}.`,
+    isProblemRequest
+      ? `An API request was flagged as ${request.isSlow ? 'slow' : 'failed'}.`
+      : 'A developer wants help understanding an API request.',
     `Method: ${request.method}`,
     `Endpoint: ${sanitizedUrl}`,
     `Status: ${request.status}`,
@@ -504,8 +528,15 @@ export function buildAiSuggestionPrompt(request: AISuggestionRequest) {
     request.isDuplicate ? `This endpoint was called ${request.duplicateCount} times this session.` : '',
     request.dependsOnCount > 0 ? `This request is part of a dependency chain with ${request.dependsOnCount} upstream request(s).` : '',
     '',
-    'In 2-3 sentences, diagnose the most likely cause and suggest one specific fix.',
-    'Be concrete. Do not give generic advice.',
+    'Reply using exactly these section headings:',
+    'General info:',
+    'Output:',
+    'Solution to issue:',
+    '',
+    isProblemRequest
+      ? 'For "General info", explain what the API likely does and why the page may call it. For "Output", summarize what is notable about the response or timing. For "Solution to issue", give one concrete fix for the likely issue.'
+      : 'For "General info", explain what the API likely does and why the page may call it. For "Output", summarize what is notable about the request or response. For "Solution to issue", say "No issue detected." unless there is a meaningful concern worth calling out.',
+    'Keep each section short and concrete. Do not give generic advice.',
   ].filter(Boolean).join('\n')
 }
 
@@ -958,11 +989,31 @@ async function getReplayTargetSnapshot(tabId?: number): Promise<ReplayTargetSnap
   }
 }
 
+async function getRequestDetailTargetSnapshot(tabId?: number): Promise<RequestDetailTargetSnapshot> {
+  const activeTabId = tabId ?? await getActiveTabId()
+  const resolvedTabId = pickTrackedTabId(activeTabId, requestDetailTargetsByTab.keys())
+
+  return {
+    tabId: resolvedTabId,
+    requestId: resolvedTabId == null ? null : requestDetailTargetsByTab.get(resolvedTabId) ?? null,
+  }
+}
+
 function publishReplayTarget(tabId: number, request: ReplayRequest) {
   chrome.runtime.sendMessage({
     type: 'REPLAY_TARGET_SELECTED',
     tabId,
     payload: request,
+  }).catch(() => {
+    // No extension page is currently listening.
+  })
+}
+
+function publishRequestDetailTarget(tabId: number, requestId: string) {
+  chrome.runtime.sendMessage({
+    type: 'REQUEST_DETAIL_SELECTED',
+    tabId,
+    payload: { requestId },
   }).catch(() => {
     // No extension page is currently listening.
   })
@@ -1109,11 +1160,17 @@ async function persistAiSuggestionForRequest(requestId: string, suggestion: stri
   })
 }
 
-chrome.debugger.onDetach.addListener(source => {
+chrome.debugger.onDetach.addListener((source, reason) => {
   if (source.tabId == null) return
 
   attachedDebuggerTabs.delete(source.tabId)
   cdpRequestsByTab.delete(source.tabId)
+
+  if (reason === 'canceled_by_user') {
+    void disablePreciseModeSetting().catch(() => {
+      // Ignore storage write failures during debugger teardown.
+    })
+  }
 })
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -1197,6 +1254,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   sessionsByTab.delete(tabId)
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
+  requestDetailTargetsByTab.delete(tabId)
   pausedOverlayTabs.delete(tabId)
   networkEventsByTab.delete(tabId)
   clearAllPendingRequests(tabId)
@@ -1209,10 +1267,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   sessionsByTab.delete(tabId)
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
+  requestDetailTargetsByTab.delete(tabId)
   networkEventsByTab.delete(tabId)
   clearAllPendingRequests(tabId)
   cdpRequestsByTab.delete(tabId)
   publishSession(tabId)
+})
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  void ensurePreciseModeForTab(tabId).catch(() => {
+    // Ignore tabs that cannot be attached in the current browser state.
+  })
 })
 
 chrome.webRequest.onCompleted.addListener(details => {
@@ -1238,12 +1303,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_OVERLAY_STATE') {
+    void ensurePreciseModeForTab(sender.tab?.id ?? message.tabId).catch(() => {
+      // Ignore attach failures here; overlay state can still be returned.
+    })
     getOverlayStateSnapshot(message.tabId).then(sendResponse)
     return true
   }
 
   if (message.type === 'GET_REPLAY_TARGET') {
     getReplayTargetSnapshot(message.tabId).then(sendResponse)
+    return true
+  }
+
+  if (message.type === 'GET_REQUEST_DETAIL_TARGET') {
+    getRequestDetailTargetSnapshot(message.tabId).then(sendResponse)
     return true
   }
 
@@ -1317,10 +1390,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false
   }
 
+  if (message.type === 'SELECT_REQUEST_DETAILS') {
+    requestDetailTargetsByTab.set(sender.tab.id, message.payload.requestId)
+    publishRequestDetailTarget(sender.tab.id, message.payload.requestId)
+    chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => {
+      // Side panel open can fail if Chrome does not treat the source as a user gesture.
+    })
+    return false
+  }
+
   if (message.type === 'CLEAR_SESSION') {
     sessionsByTab.delete(sender.tab.id)
     duplicateGroupsByTab.delete(sender.tab.id)
     replayTargetsByTab.delete(sender.tab.id)
+    requestDetailTargetsByTab.delete(sender.tab.id)
     networkEventsByTab.delete(sender.tab.id)
     clearAllPendingRequests(sender.tab.id)
     cdpRequestsByTab.delete(sender.tab.id)

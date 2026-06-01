@@ -3,10 +3,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import type {
+  AISuggestionResponse,
   ReplayAck,
   ReplayProgressPayload,
   ReplayRequest,
   ReplayResult,
+  RequestDetailTargetSnapshot,
   ReplayTargetSnapshot,
   RequestEntry,
   SessionSnapshot,
@@ -14,8 +16,10 @@ import type {
 import { getSettings } from '../shared/settings'
 import '../index.css'
 
-type Tab = 'session' | 'deps' | 'replay'
+type Tab = 'session' | 'deps' | 'details' | 'replay'
 type DiffLine = { text: string; kind: 'same' | 'add' | 'del' }
+type JsonExpandMode = 'all' | 'none' | null
+type JsonTab = 'response' | 'request'
 type DependencyGraphNode = {
   id: string
   label: string
@@ -44,6 +48,13 @@ type ReplayTargetSelectedMessage = {
   type: 'REPLAY_TARGET_SELECTED'
   tabId: number
   payload: ReplayRequest
+}
+type RequestDetailSelectedMessage = {
+  type: 'REQUEST_DETAIL_SELECTED'
+  tabId: number
+  payload: {
+    requestId: string
+  }
 }
 type DependenciesUpdatedMessage = {
   type: 'DEPENDENCIES_UPDATED'
@@ -86,6 +97,17 @@ function isReplayTargetSelectedMessage(message: unknown): message is ReplayTarge
   )
 }
 
+function isRequestDetailSelectedMessage(message: unknown): message is RequestDetailSelectedMessage {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'type' in message &&
+    (message as { type?: unknown }).type === 'REQUEST_DETAIL_SELECTED' &&
+    'tabId' in message &&
+    'payload' in message
+  )
+}
+
 function isDependenciesUpdatedMessage(message: unknown): message is DependenciesUpdatedMessage {
   return (
     typeof message === 'object' &&
@@ -112,6 +134,9 @@ export function SidePanel() {
   const [sessionTabId, setSessionTabId] = useState<number | null>(null)
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [replayTarget, setReplayTarget] = useState<ReplayRequest | null>(null)
+  const [detailRequestId, setDetailRequestId] = useState<string | null>(null)
+  const detailRequest = requests.find(candidate => candidate.id === detailRequestId) ?? null
+  const effectiveTab: Tab = tab === 'details' && !detailRequest ? 'session' : tab
 
   useEffect(() => {
     let cancelled = false
@@ -140,6 +165,18 @@ export function SidePanel() {
       }).catch(() => {
         // Keep the last selected replay target during transient runtime disconnects.
       })
+
+      chrome.runtime.sendMessage({ type: 'GET_REQUEST_DETAIL_TARGET' }).then((snapshot: RequestDetailTargetSnapshot | undefined) => {
+        if (cancelled || !snapshot) return
+
+        setSessionTabId(currentTabId => currentTabId ?? snapshot.tabId)
+        setDetailRequestId(snapshot.requestId)
+        if (snapshot.requestId) {
+          setTab('details')
+        }
+      }).catch(() => {
+        // Keep the last selected detail target during transient runtime disconnects.
+      })
     }
 
     const handleMessage = (message: unknown) => {
@@ -147,6 +184,13 @@ export function SidePanel() {
         setSessionTabId(message.tabId)
         setReplayTarget(message.payload)
         setTab('replay')
+        return
+      }
+
+      if (isRequestDetailSelectedMessage(message)) {
+        setSessionTabId(message.tabId)
+        setDetailRequestId(message.payload.requestId)
+        setTab('details')
         return
       }
 
@@ -184,19 +228,22 @@ export function SidePanel() {
     }
   }, [])
 
+  const visibleTabs = [
+    ['session', 'Session'],
+    ['deps', 'Dependency Map'],
+    ...(detailRequest ? ([['details', 'Details']] as const) : []),
+    ['replay', 'Replay'],
+  ] as const
+
   return (
     <div className="api-theme-shell api-sidepanel">
       <nav className="api-sidepanel-tabs" aria-label="Side panel views">
-        {([
-          ['session', 'Session'],
-          ['deps', 'Dependency Map'],
-          ['replay', 'Replay'],
-        ] as const).map(([key, label]) => (
+        {visibleTabs.map(([key, label]) => (
           <button
             key={key}
-            className={`api-sidepanel-tab${tab === key ? ' is-active' : ''}`}
+            className={`api-sidepanel-tab${effectiveTab === key ? ' is-active' : ''}`}
             onClick={() => setTab(key)}
-            aria-pressed={tab === key}
+            aria-pressed={effectiveTab === key}
           >
             {label}
           </button>
@@ -204,9 +251,19 @@ export function SidePanel() {
       </nav>
 
       <main className="api-sidepanel-content api-scroll">
-        {tab === 'session' && <SessionTab requests={requests} />}
-        {tab === 'deps' && <DependencyTab requests={requests} />}
-        {tab === 'replay' && (
+        {effectiveTab === 'session' && <SessionTab requests={requests} />}
+        {effectiveTab === 'deps' && <DependencyTab requests={requests} />}
+        {effectiveTab === 'details' && (
+          <DetailsTab
+            key={detailRequestId ?? 'empty-details'}
+            request={detailRequest}
+            onOpenReplay={request => {
+              setReplayTarget(request)
+              setTab('replay')
+            }}
+          />
+        )}
+        {effectiveTab === 'replay' && (
           <ReplayTab
             key={replayTarget?.id ?? 'empty-replay'}
             tabId={sessionTabId}
@@ -455,6 +512,189 @@ function rowsToHeaders(rows: { k: string; v: string }[]) {
     if (key) acc[key] = row.v
     return acc
   }, {})
+}
+
+function DetailsTab({
+  request,
+  onOpenReplay,
+}: {
+  request: RequestEntry | null
+  onOpenReplay: (request: ReplayRequest) => void
+}) {
+  const [tab, setTab] = useState<JsonTab>('response')
+  const [search, setSearch] = useState('')
+  const [forceExpand, setForceExpand] = useState<JsonExpandMode>(null)
+  const [copied, setCopied] = useState(false)
+  const [aiState, setAiState] = useState<'idle' | 'loading' | 'result' | 'error'>('idle')
+  const [aiSuggestion, setAiSuggestion] = useState('')
+  const [aiError, setAiError] = useState('')
+
+  if (!request) {
+    return (
+      <section className="api-sidepanel-section">
+        <SectionHeading>Request Details</SectionHeading>
+        <div className="api-muted">No request selected. Choose Details from the overlay to inspect one API request here.</div>
+      </section>
+    )
+  }
+
+  const requestPreview = {
+    method: request.method,
+    url: request.url,
+    headers: request.requestHeaders,
+    body: request.requestBody,
+    requestSize: request.requestSize,
+    fingerprint: request.fingerprint,
+    duplicateOf: request.duplicateOf,
+    duplicateCount: request.duplicateCount,
+  }
+  const requestJson = tab === 'response'
+    ? parseDetailsBody(request.responseBody)
+    : requestPreview
+  const titlePath = getPath(request.url)
+
+  const triggerAI = async () => {
+    setAiState('loading')
+    setAiError('')
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'ASK_AI_SUGGESTION',
+        payload: {
+          id: request.id,
+          method: request.method,
+          url: request.url,
+          status: request.status,
+          duration: request.duration,
+          ttfb: request.ttfb,
+          responseSize: request.responseSize,
+          isSlow: request.isSlow,
+          isDuplicate: request.isDuplicate,
+          duplicateCount: request.duplicateCount,
+          dependsOnCount: request.dependsOn.length,
+        },
+      }) as AISuggestionResponse | undefined
+
+      if (!response?.ok) {
+        throw new Error(response?.error ?? 'Unable to ask AI.')
+      }
+
+      setAiSuggestion(response.suggestion ?? 'No suggestion returned.')
+      setAiState('result')
+    } catch (error) {
+      setAiState('error')
+      setAiError(error instanceof Error ? error.message : 'Unknown error.')
+    }
+  }
+
+  const openReplay = () => {
+    onOpenReplay({
+      id: request.id,
+      method: request.method,
+      url: request.url,
+      headers: request.requestHeaders,
+      body: request.requestBody,
+      originalResponseBody: request.responseBody,
+    })
+  }
+
+  const copyJson = () => {
+    const value = tab === 'response'
+      ? (request.responseBody ?? JSON.stringify(requestJson, null, 2))
+      : JSON.stringify(requestPreview, null, 2)
+
+    navigator.clipboard?.writeText(value)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <section className="api-sidepanel-section">
+      <SectionHeading>Request Details</SectionHeading>
+      <div className="api-sidepanel-card-grid" style={{ marginBottom: 12 }}>
+        <StatCard title="Status" value={String(request.status || '-')} subtext={request.method} />
+        <StatCard title="Duration" value={formatMs(request.duration)} subtext={`TTFB ${request.ttfb > 0 ? formatMs(request.ttfb) : '-'}`} valueColor={latencyColor(request.duration)} />
+        <StatCard title="Source" value={timingSourceLabel(request.timingSource)} subtext={formatBytes(request.responseSize)} />
+      </div>
+
+      <div style={{ display: 'grid', gap: 10 }}>
+        <div className="api-sidepanel-card">
+          <div className="api-sidepanel-card-title">Endpoint</div>
+          <div className="api-muted" style={{ marginTop: 6, fontSize: 12, overflowWrap: 'anywhere' }}>{titlePath}</div>
+          <div className="api-muted" style={{ marginTop: 4, fontSize: 11, overflowWrap: 'anywhere' }}>{request.url}</div>
+        </div>
+
+        <div className="api-sidepanel-card-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+          {[
+            ['Request', formatBytes(request.requestSize)],
+            ['Response', formatBytes(request.responseSize)],
+            ['Transfer', formatBytes(request.transferSize)],
+            ['DNS', request.dnsTime > 0 ? formatMs(request.dnsTime) : '-'],
+            ['Connect', request.connectTime > 0 ? formatMs(request.connectTime) : '-'],
+            ['SSL', request.sslTime > 0 ? formatMs(request.sslTime) : '-'],
+            ['Request Phase', request.requestTime > 0 ? formatMs(request.requestTime) : '-'],
+            ['Response Phase', request.responseTime > 0 ? formatMs(request.responseTime) : '-'],
+            ['Duplicates', String(request.duplicateCount)],
+          ].map(([label, value]) => (
+            <div key={label} className="api-sidepanel-card">
+              <div className="api-sidepanel-card-title">{label}</div>
+              <div style={{ marginTop: 6, color: 'var(--api-text)', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {(['response', 'request'] as const).map(currentTab => (
+            <button
+              key={currentTab}
+              className={`api-sidepanel-tab${tab === currentTab ? ' is-active' : ''}`}
+              onClick={() => setTab(currentTab)}
+              aria-pressed={tab === currentTab}
+            >
+              {currentTab}
+            </button>
+          ))}
+          <input
+            className="api-replay-input"
+            style={{ flex: '1 1 180px', minWidth: 180 }}
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Search keys..."
+          />
+          <button className="api-sidepanel-plain" onClick={() => setForceExpand(forceExpand === 'all' ? 'none' : 'all')}>
+            {forceExpand === 'all' ? 'Collapse all' : 'Expand all'}
+          </button>
+          <button className="api-sidepanel-plain" onClick={copyJson}>
+            {copied ? 'Copied' : 'Copy JSON'}
+          </button>
+        </div>
+
+        <div className="api-sidepanel-card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ maxHeight: 420, overflow: 'auto', padding: 12 }}>
+            <DetailJsonNode value={requestJson} depth={0} search={search} forceExpand={forceExpand} path={tab} />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="api-primary-wide" style={{ width: 'auto' }} onClick={triggerAI}>Ask AI</button>
+          <button className="api-secondary-button" onClick={openReplay}>Replay</button>
+        </div>
+
+        {(aiState !== 'idle' || request.aiSuggestion) && (
+          <div className="api-sidepanel-card">
+            <div className="api-sidepanel-card-title">AI Analysis</div>
+            <div className="api-muted" style={{ marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+              {aiState === 'loading'
+                ? 'Analysing request...'
+                : aiState === 'error'
+                  ? (aiError || 'Unknown error.')
+                  : (aiSuggestion || request.aiSuggestion || 'No suggestion returned.')}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  )
 }
 
 function ReplayTab({
@@ -1748,6 +1988,121 @@ function buildDependencyLayout(
         }
       })
     })
+}
+
+function parseDetailsBody(body: string | null): unknown {
+  if (!body) return null
+
+  try {
+    return JSON.parse(body)
+  } catch {
+    return { body }
+  }
+}
+
+function stringifyDetailJsonValue(value: unknown) {
+  if (typeof value === 'string') return `"${value}"`
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value === null) return 'null'
+  if (typeof value === 'undefined') return 'undefined'
+  return ''
+}
+
+function appendDetailJsonPath(path: string, key: string, isArray: boolean) {
+  return isArray ? `${path}[${key}]` : `${path}.${key}`
+}
+
+function DetailJsonNode({
+  k,
+  value,
+  depth,
+  search,
+  forceExpand,
+  path,
+}: {
+  k?: string
+  value: unknown
+  depth: number
+  search: string
+  forceExpand: JsonExpandMode
+  path: string
+}) {
+  const [open, setOpen] = useState(depth < 2)
+  const isOpen = forceExpand === 'all' ? true : forceExpand === 'none' ? false : open
+
+  const isObj = value && typeof value === 'object' && !Array.isArray(value)
+  const isArr = Array.isArray(value)
+  const valueText = stringifyDetailJsonValue(value)
+  const normalizedSearch = search.trim().toLowerCase()
+  const matches = Boolean(
+    normalizedSearch &&
+    (
+      k?.toLowerCase().includes(normalizedSearch) ||
+      path.toLowerCase().includes(normalizedSearch) ||
+      valueText.toLowerCase().includes(normalizedSearch)
+    )
+  )
+  const dim = normalizedSearch && !matches ? 0.4 : 1
+  const indent = depth * 16
+
+  if (isObj || isArr) {
+    const obj = value as Record<string, unknown> | unknown[]
+    const entries = isArr
+      ? (obj as unknown[]).map((v, i) => [String(i), v] as [string, unknown])
+      : Object.entries(obj as Record<string, unknown>)
+
+    return (
+      <div style={{ opacity: dim, paddingLeft: depth === 0 ? 0 : 12, borderLeft: depth === 0 ? 'none' : '1px solid var(--api-border)' }}>
+        <div
+          style={{ display: 'flex', gap: 6, alignItems: 'center', minHeight: 22, cursor: 'pointer', paddingLeft: indent, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+          onClick={() => setOpen(current => !current)}
+        >
+          <span style={{ display: 'inline-block', width: 10, color: 'var(--api-text-subtle)', transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 10 }}>{'>'}</span>
+          {k !== undefined ? <span style={{ color: 'var(--api-color-primary)' }}>"{k}"</span> : null}
+          {k !== undefined ? <span style={{ color: 'var(--api-text-subtle)' }}>:</span> : null}
+          {!isOpen ? <span style={{ color: 'var(--api-text-subtle)' }}>{isArr ? `[...] ${entries.length} items` : `{...} ${entries.length} keys`}</span> : null}
+          {isOpen ? <span style={{ color: 'var(--api-text-subtle)' }}>{isArr ? '[' : '{'}</span> : null}
+          <span style={{ color: 'var(--api-border-strong)', fontSize: 10, marginLeft: 'auto' }}>{path}</span>
+        </div>
+        {isOpen ? (
+          <div>
+            {entries.map(([childKey, childValue]) => (
+              <DetailJsonNode
+                key={childKey}
+                k={childKey}
+                value={childValue}
+                depth={depth + 1}
+                search={search}
+                forceExpand={forceExpand}
+                path={appendDetailJsonPath(path, childKey, isArr)}
+              />
+            ))}
+            <div style={{ paddingLeft: indent + 14, color: 'var(--api-text-subtle)', fontSize: 12, fontFamily: 'ui-monospace, monospace' }}>
+              {isArr ? ']' : '}'}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
+  const valueType = value === null ? 'null' : typeof value
+  const valueColor = valueType === 'string'
+    ? 'var(--api-success)'
+    : valueType === 'number'
+      ? '#89c2ff'
+      : valueType === 'boolean'
+        ? 'var(--api-warning)'
+        : 'var(--api-text-subtle)'
+
+  return (
+    <div style={{ opacity: dim, paddingLeft: indent + 14, display: 'flex', gap: 6, alignItems: 'center', minHeight: 22, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+      {k !== undefined ? <span style={{ color: 'var(--api-color-primary)' }}>"{k}"</span> : null}
+      {k !== undefined ? <span style={{ color: 'var(--api-text-subtle)' }}>:</span> : null}
+      <span style={{ color: valueColor }}>{valueText}</span>
+      <span style={{ color: 'var(--api-border-strong)', fontSize: 10, marginLeft: 'auto' }}>{path}</span>
+    </div>
+  )
 }
 
 function formatJsonLike(value: unknown) {

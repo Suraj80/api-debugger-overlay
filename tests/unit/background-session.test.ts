@@ -56,6 +56,7 @@ function installChromeMock() {
   const tabs = {
     query: vi.fn(() => Promise.resolve([{ id: 7 }])),
     sendMessage: vi.fn(() => Promise.resolve()),
+    onActivated: { addListener: vi.fn() },
     onRemoved: { addListener: vi.fn() },
     onUpdated: { addListener: vi.fn() },
   }

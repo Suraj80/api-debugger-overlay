@@ -364,6 +364,16 @@ const overlayThemeCss = `
     padding: 12px;
   }
 
+  .apidbg-detail.is-modal {
+    display: flex;
+    max-height: min(84vh, 760px);
+    flex-direction: column;
+    border: 1px solid var(--api-border);
+    border-radius: 14px;
+    box-shadow: 0 28px 68px rgba(0, 0, 0, 0.62);
+    padding: 16px;
+  }
+
   .apidbg-detail-header {
     display: flex;
     justify-content: space-between;
@@ -566,6 +576,72 @@ const overlayThemeCss = `
     font-weight: 700;
   }
 
+  .apidbg-detail-sections {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .apidbg-detail-card {
+    border: 1px solid var(--api-border);
+    border-radius: 8px;
+    background: var(--api-surface);
+    padding: 10px 12px;
+  }
+
+  .apidbg-detail-card-title {
+    color: var(--api-text);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  .apidbg-detail-card-body {
+    margin-top: 6px;
+    color: var(--api-text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .apidbg-detail-topline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .apidbg-detail-heading {
+    color: var(--api-text);
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .apidbg-detail-subheading {
+    color: var(--api-text-subtle);
+    font-size: 11px;
+  }
+
+  .apidbg-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483646;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 7, 10, 0.74);
+    backdrop-filter: blur(3px);
+    padding: 22px;
+  }
+
+  .apidbg-modal-shell {
+    width: min(940px, calc(100vw - 44px));
+    max-width: 100%;
+  }
+
   .apidbg-primary-button,
   .apidbg-secondary-button {
     border-radius: 6px;
@@ -604,6 +680,14 @@ const overlayThemeCss = `
     font-size: 13px;
     line-height: 1.6;
     margin-top: 8px;
+    white-space: pre-wrap;
+  }
+
+  .apidbg-ai-section-label {
+    display: inline-block;
+    color: var(--api-text);
+    font-weight: 700;
+    margin-bottom: 2px;
   }
 
   .apidbg-ai-pill {
@@ -1163,6 +1247,10 @@ function getPath(url: string) {
   }
 }
 
+function formatTimingSourceLabel(source: RequestEntry['timingSource']) {
+  return source === 'cdp' ? 'CDP' : source === 'performance' ? 'Browser' : 'Proxy'
+}
+
 function Sparkline({ requests }: { requests: RequestEntry[] }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [hover, setHover] = useState<{ x: number; y: number; r: RequestEntry } | null>(null)
@@ -1274,8 +1362,33 @@ function AICard({
     )
   }
 
+  const formatAiText = (value: string) => {
+    const lines = value.split('\n')
+    const labels = new Set(['General info:', 'Output:', 'Solution to issue:'])
+
+    return lines.map((line, index) => {
+      const trimmedLine = line.trim()
+      if (labels.has(trimmedLine)) {
+        return (
+          <React.Fragment key={`label-${index}`}>
+            {index > 0 ? '\n' : null}
+            <span className="apidbg-ai-section-label">{trimmedLine}</span>
+            {'\n'}
+          </React.Fragment>
+        )
+      }
+
+      return (
+        <React.Fragment key={`line-${index}`}>
+          {line}
+          {index < lines.length - 1 ? '\n' : null}
+        </React.Fragment>
+      )
+    })
+  }
+
   const patterns = ['N+1', 'over-fetching', 'waterfall', 'pagination']
-  let parts: React.ReactNode[] = [text ?? 'This endpoint may benefit from checking repeated calls, payload size, and response latency.']
+  let parts: React.ReactNode[] = [formatAiText(text ?? 'General info:\nNo details available.\n\nOutput:\nNo output returned.\n\nSolution to issue:\nNo suggestion returned.')]
 
   patterns.forEach(pattern => {
     parts = parts.flatMap(part => {
@@ -1330,6 +1443,37 @@ function RequestRow({ req }: { req: RequestEntry }) {
 
   const jsonValue = tab === 'response' ? parsedBody ?? { body: null } : requestObj
   const isLargePayload = req.responseSize > settings.largePayloadThresholdKb * 1024
+
+  const copyJson = () => {
+    navigator.clipboard?.writeText(
+      tab === 'response'
+        ? (req.responseBody ?? JSON.stringify(jsonValue, null, 2))
+        : JSON.stringify(requestObj, null, 2),
+    )
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1500)
+  }
+
+  const replayRequest = () => {
+    void sendRuntimeMessage({
+      type: 'SELECT_REPLAY',
+      payload: {
+        id: req.id,
+        method: req.method,
+        url: req.url,
+        headers: req.requestHeaders,
+        body: req.requestBody,
+        originalResponseBody: req.responseBody,
+      },
+    })
+  }
+
+  const openDetailsInSidepanel = () => {
+    void sendRuntimeMessage({
+      type: 'SELECT_REQUEST_DETAILS',
+      payload: { requestId: req.id },
+    })
+  }
 
   const triggerAI = async () => {
     setAiState('loading')
@@ -1439,8 +1583,16 @@ function RequestRow({ req }: { req: RequestEntry }) {
 
           <div className="apidbg-meta-grid">
             <div className="apidbg-meta-cell">
+              <div className="apidbg-meta-label">Duration</div>
+              <div className="apidbg-meta-value">{req.duration > 0 ? `${req.duration}ms` : '-'}</div>
+            </div>
+            <div className="apidbg-meta-cell">
               <div className="apidbg-meta-label">TTFB</div>
               <div className="apidbg-meta-value">{req.ttfb > 0 ? `${req.ttfb}ms` : '-'}</div>
+            </div>
+            <div className="apidbg-meta-cell">
+              <div className="apidbg-meta-label">Timing</div>
+              <div className="apidbg-meta-value">{formatTimingSourceLabel(req.timingSource)}</div>
             </div>
             <div className="apidbg-meta-cell">
               <div className="apidbg-meta-label">Request</div>
@@ -1450,16 +1602,16 @@ function RequestRow({ req }: { req: RequestEntry }) {
               <div className="apidbg-meta-label">Response</div>
               <div className="apidbg-meta-value">{formatBytes(req.responseSize)}</div>
             </div>
+            <div className="apidbg-meta-cell">
+              <div className="apidbg-meta-label">Transfer</div>
+              <div className="apidbg-meta-value">{formatBytes(req.transferSize)}</div>
+            </div>
             {isLargePayload && (
               <div className="apidbg-meta-cell">
                 <div className="apidbg-meta-label">Payload Limit</div>
                 <div className="apidbg-meta-value">{formatBytes(settings.largePayloadThresholdKb * 1024)}</div>
               </div>
             )}
-            <div className="apidbg-meta-cell">
-              <div className="apidbg-meta-label">Timing</div>
-              <div className="apidbg-meta-value">{req.timingSource === 'cdp' ? 'CDP' : req.timingSource === 'performance' ? 'Browser' : 'Proxy'}</div>
-            </div>
             {req.duplicateCount > 1 && (
               <div className="apidbg-meta-cell">
                 <div className="apidbg-meta-label">Duplicate Group</div>
@@ -1484,15 +1636,11 @@ function RequestRow({ req }: { req: RequestEntry }) {
 
           <div className="apidbg-json-footer">
             <span className="apidbg-json-meta">
-              {(req.responseSize / 1024).toFixed(1)} KB response - {countKeys(jsonValue)} keys
+              {formatBytes(tab === 'response' ? req.responseSize : req.requestSize)} - {countKeys(jsonValue)} keys
             </span>
             <button
               className="apidbg-plain-button"
-              onClick={() => {
-                navigator.clipboard?.writeText(req.responseBody ?? JSON.stringify(jsonValue, null, 2))
-                setCopied(true)
-                window.setTimeout(() => setCopied(false), 1500)
-              }}
+              onClick={copyJson}
               style={{ color: copied ? 'var(--api-success)' : 'var(--api-color-primary-soft)' }}
             >
               {copied ? 'Copied' : 'Copy JSON'}
@@ -1501,27 +1649,9 @@ function RequestRow({ req }: { req: RequestEntry }) {
 
           <div className="apidbg-detail-actions">
             <TimingSourceBadge source={req.timingSource} />
-            {(req.isSlow || req.status >= 400) && (
-              <button className="apidbg-primary-button" onClick={triggerAI}>Ask AI</button>
-            )}
-            <button
-              className="apidbg-secondary-button"
-              onClick={() => {
-                void sendRuntimeMessage({
-                  type: 'SELECT_REPLAY',
-                  payload: {
-                    id: req.id,
-                    method: req.method,
-                    url: req.url,
-                    headers: req.requestHeaders,
-                    body: req.requestBody,
-                    originalResponseBody: req.responseBody,
-                  },
-                })
-              }}
-            >
-              Replay
-            </button>
+            <button className="apidbg-primary-button" onClick={triggerAI}>Ask AI</button>
+            <button className="apidbg-secondary-button" onClick={openDetailsInSidepanel}>Details</button>
+            <button className="apidbg-secondary-button" onClick={replayRequest}>Replay</button>
           </div>
 
           <AICard
