@@ -24,16 +24,23 @@ const bridgeConfig = readBridgeConfig()
 function readBridgeConfig() {
   const currentScript = document.currentScript
   const config = currentScript && currentScript.__apiDebuggerBridgeConfig
+  const datasetConfig = currentScript?.dataset
+    ? {
+        replayEventType: currentScript.dataset.apiDebuggerReplayEventType,
+        replayToken: currentScript.dataset.apiDebuggerReplayToken,
+      }
+    : null
+  const bridge = config || datasetConfig
 
   if (
-    !config ||
-    typeof config.replayEventType !== 'string' ||
-    typeof config.replayToken !== 'string'
+    !bridge ||
+    typeof bridge.replayEventType !== 'string' ||
+    typeof bridge.replayToken !== 'string'
   ) {
     return null
   }
 
-  return config
+  return bridge
 }
 
 function addFingerprint(fp) {
@@ -308,6 +315,14 @@ function postTimingUpdate(payload) {
   safePostMessage({
     source: 'api-debugger-injected',
     type: 'TIMING_UPDATE',
+    payload,
+  })
+}
+
+function postReplayProgress(payload) {
+  safePostMessage({
+    source: 'api-debugger-injected',
+    type: 'API_DEBUGGER_REPLAY_PROGRESS',
     payload,
   })
 }
@@ -813,6 +828,10 @@ window.setInterval(() => {
 
 async function replayRequest(requestId, request) {
   const startTime = performance.now()
+  postReplayProgress({
+    jobId: requestId,
+    phase: 'started',
+  })
 
   try {
     const headers = { ...(request.headers || {}) }
@@ -831,6 +850,17 @@ async function replayRequest(requestId, request) {
     const responseHeaders = {}
     response.headers.forEach((value, key) => {
       responseHeaders[key] = value
+    })
+
+    postReplayProgress({
+      jobId: requestId,
+      phase: 'headers',
+      result: {
+        status: response.status,
+        duration: Math.round(performance.now() - startTime),
+        responseBody: null,
+        responseHeaders,
+      },
     })
 
     const contentType = response.headers.get('content-type') || ''

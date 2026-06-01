@@ -2,7 +2,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
-import type { ReplayRequest, ReplayResult, ReplayTargetSnapshot, RequestEntry, SessionSnapshot } from '../shared/types'
+import type {
+  ReplayAck,
+  ReplayProgressPayload,
+  ReplayRequest,
+  ReplayResult,
+  ReplayTargetSnapshot,
+  RequestEntry,
+  SessionSnapshot,
+} from '../shared/types'
 import { getSettings } from '../shared/settings'
 import '../index.css'
 
@@ -44,6 +52,11 @@ type DependenciesUpdatedMessage = {
     dependsOn: string[]
   }
 }
+type ReplayProgressMessage = {
+  type: 'REPLAY_PROGRESS'
+  tabId: number
+  payload: ReplayProgressPayload
+}
 
 declare global {
   interface Window {
@@ -83,6 +96,17 @@ function isDependenciesUpdatedMessage(message: unknown): message is Dependencies
   )
 }
 
+function isReplayProgressMessage(message: unknown): message is ReplayProgressMessage {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'type' in message &&
+    (message as { type?: unknown }).type === 'REPLAY_PROGRESS' &&
+    'tabId' in message &&
+    'payload' in message
+  )
+}
+
 export function SidePanel() {
   const [tab, setTab] = useState<Tab>('session')
   const [sessionTabId, setSessionTabId] = useState<number | null>(null)
@@ -114,7 +138,7 @@ export function SidePanel() {
           setTab('replay')
         }
       }).catch(() => {
-        if (!cancelled) setReplayTarget(null)
+        // Keep the last selected replay target during transient runtime disconnects.
       })
     }
 
@@ -450,6 +474,9 @@ function ReplayTab({
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<ReplayResult | null>(null)
   const [bodyError, setBodyError] = useState('')
+  const [replayPhase, setReplayPhase] = useState<'idle' | 'started' | 'headers' | 'complete' | 'error'>('idle')
+  const activeReplayJobIdRef = useRef<string | null>(null)
+  const replayTimeoutIdRef = useRef<number | null>(null)
   const lineNumbers = body.split('\n').map((_, index) => index + 1)
   const headerMap = rowsToHeaders(headers)
   const expectsJsonBody = /\bjson\b/i.test(headerMap['content-type'] ?? '') || /^[\s[{]/.test(body.trim())
@@ -477,12 +504,19 @@ function ReplayTab({
   }
 
   const resetReplay = () => {
+    if (replayTimeoutIdRef.current != null) {
+      window.clearTimeout(replayTimeoutIdRef.current)
+      replayTimeoutIdRef.current = null
+    }
+    activeReplayJobIdRef.current = null
     setMethod(request?.method ?? 'GET')
     setUrl(request?.url ?? '')
     setHeaders(headersToRows(request?.headers ?? {}))
     setBody(request?.body ?? '')
     setBodyError('')
     setResult(null)
+    setReplayPhase('idle')
+    setSending(false)
   }
 
   const send = () => {
@@ -497,22 +531,45 @@ function ReplayTab({
       }
     }
 
+    const jobId = crypto.randomUUID()
+    if (replayTimeoutIdRef.current != null) {
+      window.clearTimeout(replayTimeoutIdRef.current)
+    }
+    activeReplayJobIdRef.current = jobId
+    replayTimeoutIdRef.current = window.setTimeout(() => {
+      if (activeReplayJobIdRef.current !== jobId) return
+
+      activeReplayJobIdRef.current = null
+      replayTimeoutIdRef.current = null
+      setReplayPhase('error')
+      setResult({
+        status: 0,
+        duration: 0,
+        responseBody: 'Replay timed out waiting for browser replay progress.',
+        responseHeaders: {},
+      })
+      setSending(false)
+    }, 30000)
     setSending(true)
     setResult(null)
+    setReplayPhase('started')
 
     chrome.runtime.sendMessage({
       type: 'RUN_REPLAY',
       tabId,
       payload: {
         id: request?.id ?? crypto.randomUUID(),
+        jobId,
         method,
         url,
         headers: headerMap,
         body: body.trim() ? body : null,
         originalResponseBody: request?.originalResponseBody ?? null,
       },
-    }).then((replayResult: ReplayResult) => {
-      setResult(replayResult)
+    }).then((ack: ReplayAck | undefined) => {
+      if (!ack?.ok) {
+        throw new Error('Replay failed to start.')
+      }
     }).catch(error => {
       setResult({
         status: 0,
@@ -520,14 +577,21 @@ function ReplayTab({
         responseBody: String(error),
         responseHeaders: {},
       })
-    }).finally(() => {
       setSending(false)
+      setReplayPhase('error')
+      activeReplayJobIdRef.current = null
+      if (replayTimeoutIdRef.current != null) {
+        window.clearTimeout(replayTimeoutIdRef.current)
+        replayTimeoutIdRef.current = null
+      }
     })
   }
 
+  const formattedOriginalResponse = formatJsonLike(request?.originalResponseBody ?? '')
+  const formattedReplayResponse = formatJsonLike(result?.responseBody ?? '')
   const diff = computeDiff(
-    request?.originalResponseBody ?? '',
-    result?.responseBody ?? '',
+    formattedOriginalResponse,
+    formattedReplayResponse,
   )
   const diffSummary = summarizeDiff(diff)
 
@@ -565,6 +629,63 @@ function ReplayTab({
     replay.addEventListener('keydown', handleKeyDown)
     return () => replay.removeEventListener('keydown', handleKeyDown)
   }, [request?.id])
+
+  useEffect(() => {
+    const handleReplayProgress = (message: unknown) => {
+      if (!isReplayProgressMessage(message)) return
+      if (tabId != null && message.tabId !== tabId) return
+      if (message.payload.jobId !== activeReplayJobIdRef.current) return
+
+      if (message.payload.phase === 'started') {
+        setReplayPhase('started')
+        return
+      }
+
+      if (message.payload.phase === 'headers') {
+        setReplayPhase('headers')
+        if (message.payload.result) {
+          setResult(message.payload.result)
+        }
+        return
+      }
+
+      if (message.payload.phase === 'complete') {
+        setReplayPhase('complete')
+        if (message.payload.result) {
+          setResult(message.payload.result)
+        }
+        if (replayTimeoutIdRef.current != null) {
+          window.clearTimeout(replayTimeoutIdRef.current)
+          replayTimeoutIdRef.current = null
+        }
+        activeReplayJobIdRef.current = null
+        setSending(false)
+        return
+      }
+
+      if (message.payload.phase === 'error') {
+        setReplayPhase('error')
+        if (message.payload.result) {
+          setResult(message.payload.result)
+        }
+        if (replayTimeoutIdRef.current != null) {
+          window.clearTimeout(replayTimeoutIdRef.current)
+          replayTimeoutIdRef.current = null
+        }
+        activeReplayJobIdRef.current = null
+        setSending(false)
+      }
+    }
+
+    chrome.runtime.onMessage.addListener(handleReplayProgress)
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleReplayProgress)
+      if (replayTimeoutIdRef.current != null) {
+        window.clearTimeout(replayTimeoutIdRef.current)
+        replayTimeoutIdRef.current = null
+      }
+    }
+  }, [tabId])
 
   return (
     <div
@@ -669,6 +790,12 @@ function ReplayTab({
           <div style={{ fontSize: 13 }}>No replay yet</div>
           <div style={{ color: 'var(--api-border-strong)', fontSize: 11 }}>Click Replay on a captured request in the overlay.</div>
         </div>
+      ) : sending && !result ? (
+        <div className="api-replay-empty">
+          <span style={{ color: 'var(--api-border-strong)', fontSize: 32 }}>â†»</span>
+          <div style={{ fontSize: 13 }}>Replay started</div>
+          <div style={{ color: 'var(--api-border-strong)', fontSize: 11 }}>Waiting for the browser tab to return response headers...</div>
+        </div>
       ) : result ? (
         <>
           <div className="api-replay-result">
@@ -676,10 +803,16 @@ function ReplayTab({
               <span className={`api-replay-badge${result.status >= 400 || result.status === 0 ? ' is-error' : ' is-success'}`}>
                 {result.status || 'failed'}
               </span>
-              <span className="api-muted">Replay completed in {formatMs(result.duration)}</span>
+              <span className="api-muted">
+                {replayPhase === 'headers'
+                  ? `Headers received in ${formatMs(result.duration)}`
+                  : `Replay completed in ${formatMs(result.duration)}`}
+              </span>
               <span className="api-muted">{result.responseHeaders['content-type'] ?? 'unknown content-type'}</span>
             </div>
             <div className="api-replay-summary-row">
+              {replayPhase === 'started' && <span className="api-muted">Request started...</span>}
+              {replayPhase === 'headers' && <span className="api-muted">Loading response body...</span>}
               <span className="api-muted">{diffSummary.same} unchanged</span>
               <span className="api-muted">{diffSummary.added} added</span>
               <span className="api-muted">{diffSummary.removed} removed</span>
@@ -870,12 +1003,71 @@ function DiffPanel({ title, lines }: { title: string; lines: DiffLine[] }) {
       <pre className="api-diff-code">
         {lines.map((line, index) => (
           <div key={index} className={`api-diff-line${line.kind === 'add' ? ' is-add' : ''}${line.kind === 'del' ? ' is-del' : ''}`}>
-            {line.kind === 'del' ? '- ' : line.kind === 'add' ? '+ ' : '  '}
-            {line.text}
+            <span className="api-diff-prefix">{line.kind === 'del' ? '- ' : line.kind === 'add' ? '+ ' : '  '}</span>
+            {renderDiffLineContent(line.text)}
           </div>
         ))}
       </pre>
     </div>
+  )
+}
+
+function renderDiffLineContent(text: string) {
+  const leadingWhitespace = text.match(/^\s*/)?.[0] ?? ''
+  const trimmed = text.slice(leadingWhitespace.length)
+
+  if (!trimmed) {
+    return <span className="api-diff-punct">{text}</span>
+  }
+
+  const keyMatch = trimmed.match(/^"([^"]+)"(\s*:\s*)(.*)$/)
+  if (keyMatch) {
+    const [, key, separator, value] = keyMatch
+    return (
+      <>
+        {leadingWhitespace && <span className="api-diff-punct">{leadingWhitespace}</span>}
+        <span className="api-diff-key">"{key}"</span>
+        <span className="api-diff-punct">{separator}</span>
+        {renderDiffValue(value)}
+      </>
+    )
+  }
+
+  return (
+    <>
+      {leadingWhitespace && <span className="api-diff-punct">{leadingWhitespace}</span>}
+      {renderDiffValue(trimmed)}
+    </>
+  )
+}
+
+function renderDiffValue(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return <span className="api-diff-punct">{value}</span>
+  }
+
+  const trailingComma = trimmed.endsWith(',') ? ',' : ''
+  const coreValue = trailingComma ? trimmed.slice(0, -1) : trimmed
+
+  let className = 'api-diff-text'
+  if (/^".*"$/.test(coreValue)) {
+    className = 'api-diff-string'
+  } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(coreValue)) {
+    className = 'api-diff-number'
+  } else if (/^(true|false)$/.test(coreValue)) {
+    className = 'api-diff-boolean'
+  } else if (/^null$/.test(coreValue)) {
+    className = 'api-diff-null'
+  } else if (new Set(['[', ']', '{', '}']).has(coreValue)) {
+    className = 'api-diff-punct'
+  }
+
+  return (
+    <>
+      <span className={className}>{coreValue}</span>
+      {trailingComma && <span className="api-diff-punct">{trailingComma}</span>}
+    </>
   )
 }
 

@@ -2,8 +2,9 @@ import type {
   AISuggestionRequest,
   AISuggestionResponse,
   OverlayStateSnapshot,
+  ReplayAck,
+  ReplayProgressPayload,
   ReplayRequest,
-  ReplayResult,
   ReplayTargetSnapshot,
   RequestEntry,
   SessionSnapshot,
@@ -27,7 +28,7 @@ const AI_MODEL = 'gpt-5.4-mini'
 const AI_TEST_MODEL = 'gpt-5.4-mini'
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
-const replayTargetsByTab = new Map<number, ReplayRequest>()
+const replayTargetsByTab = new Map<number, ReplayTargetState>()
 const pausedOverlayTabs = new Set<number>()
 const requestReceivedAt = new Map<string, number>()
 const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
@@ -46,6 +47,12 @@ interface NetworkStatusEvent {
 interface DuplicateGroup {
   firstRequestId: string
   count: number
+}
+
+interface ReplayTargetState {
+  request: ReplayRequest
+  frameId?: number
+  documentId?: string
 }
 
 interface PendingRequestState {
@@ -947,7 +954,7 @@ async function getReplayTargetSnapshot(tabId?: number): Promise<ReplayTargetSnap
 
   return {
     tabId: resolvedTabId,
-    request: resolvedTabId == null ? null : replayTargetsByTab.get(resolvedTabId) ?? null,
+    request: resolvedTabId == null ? null : replayTargetsByTab.get(resolvedTabId)?.request ?? null,
   }
 }
 
@@ -959,6 +966,122 @@ function publishReplayTarget(tabId: number, request: ReplayRequest) {
   }).catch(() => {
     // No extension page is currently listening.
   })
+}
+
+function publishReplayProgress(tabId: number, payload: ReplayProgressPayload) {
+  chrome.runtime.sendMessage({
+    type: 'REPLAY_PROGRESS',
+    tabId,
+    payload,
+  }).catch(() => {
+    // No extension page is currently listening.
+  })
+}
+
+function sanitizeReplayHeaders(headers: Record<string, string>) {
+  const blockedHeaders = new Set([
+    'accept-encoding',
+    'connection',
+    'content-length',
+    'cookie',
+    'host',
+    'origin',
+    'referer',
+    'user-agent',
+  ])
+
+  return Object.fromEntries(
+    Object.entries(headers)
+      .filter(([key]) => {
+        const normalizedKey = key.toLowerCase()
+        return !blockedHeaders.has(normalizedKey) && !normalizedKey.startsWith('sec-')
+      })
+      .map(([key, value]) => [key, value]),
+  )
+}
+
+function decodeReplayBody(buffer: ArrayBuffer, contentType: string) {
+  if (!buffer.byteLength) return ''
+  if (
+    contentType.startsWith('text/') ||
+    contentType.includes('json') ||
+    contentType.includes('xml') ||
+    contentType.includes('javascript') ||
+    contentType.includes('graphql') ||
+    contentType.includes('x-www-form-urlencoded')
+  ) {
+    try {
+      return new TextDecoder().decode(buffer)
+    } catch {
+      return '[Replay response body unavailable: unable to decode text payload]'
+    }
+  }
+
+  return `[Binary replay response omitted: ${contentType || 'unknown content type'}, ${buffer.byteLength} bytes]`
+}
+
+async function runReplayFromBackground(tabId: number, request: ReplayRequest, jobId: string) {
+  const startTime = Date.now()
+  publishReplayProgress(tabId, {
+    jobId,
+    phase: 'started',
+  })
+
+  try {
+    const method = request.method.toUpperCase()
+    const init: RequestInit = {
+      method,
+      headers: sanitizeReplayHeaders(request.headers || {}),
+      credentials: 'include',
+      cache: 'no-store',
+      redirect: 'follow',
+    }
+
+    if (!['GET', 'HEAD'].includes(method) && request.body) {
+      init.body = request.body
+    }
+
+    const response = await fetch(request.url, init)
+    const responseHeaders: Record<string, string> = {}
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value
+    })
+
+    publishReplayProgress(tabId, {
+      jobId,
+      phase: 'headers',
+      result: {
+        status: response.status,
+        duration: Date.now() - startTime,
+        responseBody: null,
+        responseHeaders,
+      },
+    })
+
+    const contentType = response.headers.get('content-type') || ''
+    const buffer = await response.clone().arrayBuffer()
+    publishReplayProgress(tabId, {
+      jobId,
+      phase: 'complete',
+      result: {
+        status: response.status,
+        duration: Date.now() - startTime,
+        responseBody: decodeReplayBody(buffer, contentType),
+        responseHeaders,
+      },
+    })
+  } catch (error) {
+    publishReplayProgress(tabId, {
+      jobId,
+      phase: 'error',
+      result: {
+        status: 0,
+        duration: Date.now() - startTime,
+        responseBody: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        responseHeaders: {},
+      },
+    })
+  }
 }
 
 async function persistAiSuggestionForRequest(requestId: string, suggestion: string) {
@@ -1145,23 +1268,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'RUN_REPLAY') {
-    chrome.tabs.sendMessage(message.tabId, {
-      type: 'EXECUTE_REPLAY',
-      payload: message.payload,
-    }).then((result: ReplayResult) => {
-      sendResponse(result)
-    }).catch(error => {
-      sendResponse({
-        status: 0,
-        duration: 0,
-        responseBody: String(error),
-        responseHeaders: {},
-      } satisfies ReplayResult)
-    })
-    return true
+    const jobId = message.payload.jobId ?? crypto.randomUUID()
+    void runReplayFromBackground(message.tabId, message.payload, jobId)
+    sendResponse({
+      ok: true,
+      jobId,
+    } satisfies ReplayAck)
+    return false
   }
 
   if (!sender.tab?.id) return false
+
+  if (message.type === 'REPLAY_PROGRESS') {
+    publishReplayProgress(sender.tab.id, message.payload)
+    return false
+  }
 
   if (message.type === 'SET_OVERLAY_PAUSED') {
     if (message.payload.paused) {
@@ -1184,7 +1305,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'SELECT_REPLAY') {
-    replayTargetsByTab.set(sender.tab.id, message.payload)
+    replayTargetsByTab.set(sender.tab.id, {
+      request: message.payload,
+      frameId: sender.frameId,
+      documentId: sender.documentId,
+    })
     publishReplayTarget(sender.tab.id, message.payload)
     chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => {
       // Side panel open can fail if Chrome does not treat the source as a user gesture.

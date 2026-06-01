@@ -10,7 +10,7 @@ Requirements:
 - pnpm
 - Chrome 114+
 
-Install dependencies:
+Install dependencies: 
 
 ```bash
 pnpm install

@@ -5,11 +5,16 @@ import { DEFAULT_SETTINGS, getSettings, type ApiDebuggerSettings } from '../shar
 import { isExtensionContextValid } from '../shared/extensionGuard'
 import { sendRuntimeMessage } from '../shared/sendMessage'
 import { SettingsProvider, useUpdateSettings } from '../shared/SettingsContext'
-import type { OverlayStateSnapshot, ReplayRequest, ReplayResult } from '../shared/types'
+import type { OverlayStateSnapshot, ReplayRequest } from '../shared/types'
 
-const replayRequests = new Map<string, (result: ReplayResult) => void>()
 let settingsUpdater: ((s: ApiDebuggerSettings) => void) | null = null
-const INJECTED_BRIDGE_CONFIG_PROP = '__apiDebuggerBridgeConfig'
+const CONTENT_BOOTSTRAP_KEY = '__apiDebuggerContentBootstrap'
+
+declare global {
+  interface Window {
+    __apiDebuggerContentBootstrap?: boolean
+  }
+}
 
 interface InjectedBridgeConfig {
   replayEventType: string
@@ -85,6 +90,17 @@ async function start() {
     return
   }
 
+  if (window[CONTENT_BOOTSTRAP_KEY]) {
+    return
+  }
+
+  const existingHost = document.getElementById('api-debugger-root')
+  if (existingHost?.shadowRoot) {
+    // A stale host can remain after an extension reload; replace it so replay
+    // listeners and the injected bridge are guaranteed to belong to this script instance.
+    existingHost.remove()
+  }
+
   let settings = DEFAULT_SETTINGS
   let initialPaused = false
 
@@ -108,12 +124,12 @@ async function start() {
   const script = document.createElement('script')
   try {
     script.src = chrome.runtime.getURL('src/injected/index.js')
-    ;(script as HTMLScriptElement & { [INJECTED_BRIDGE_CONFIG_PROP]?: InjectedBridgeConfig })[
-      INJECTED_BRIDGE_CONFIG_PROP
-    ] = bridgeConfig
+    script.dataset.apiDebuggerReplayEventType = bridgeConfig.replayEventType
+    script.dataset.apiDebuggerReplayToken = bridgeConfig.replayToken
   } catch {
     return
   }
+  window[CONTENT_BOOTSTRAP_KEY] = true
   script.onload = () => {
     postSettingsToPage(settings)
     script.remove()
@@ -135,11 +151,22 @@ async function start() {
     if (pageIsClosing) return
 
     if (event.data?.type === 'API_DEBUGGER_REPLAY_RESULT') {
-      const resolve = replayRequests.get(event.data.requestId)
-      if (resolve) {
-        replayRequests.delete(event.data.requestId)
-        resolve(event.data.payload as ReplayResult)
-      }
+      void sendRuntimeMessage({
+        type: 'REPLAY_PROGRESS',
+        payload: {
+          jobId: event.data.requestId,
+          phase: 'complete',
+          result: event.data.payload,
+        },
+      })
+      return
+    }
+
+    if (event.data?.type === 'API_DEBUGGER_REPLAY_PROGRESS') {
+      void sendRuntimeMessage({
+        type: 'REPLAY_PROGRESS',
+        payload: event.data.payload,
+      })
       return
     }
 
@@ -151,28 +178,11 @@ async function start() {
       chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (message.type !== 'EXECUTE_REPLAY') return false
 
-        const requestId = crypto.randomUUID()
-        const timeoutId = window.setTimeout(() => {
-          const resolve = replayRequests.get(requestId)
-          if (!resolve) return
-
-          replayRequests.delete(requestId)
-          resolve({
-            status: 0,
-            duration: 0,
-            responseBody: 'Replay timed out.',
-            responseHeaders: {},
-          })
-        }, 30000)
-
-        replayRequests.set(requestId, result => {
-          window.clearTimeout(timeoutId)
-          sendResponse(result)
-        })
-
-        dispatchReplayToPage(bridgeConfig, requestId, message.payload as ReplayRequest)
-
-        return true
+        const replayRequest = message.payload as ReplayRequest
+        const requestId = replayRequest.jobId ?? crypto.randomUUID()
+        dispatchReplayToPage(bridgeConfig, requestId, replayRequest)
+        sendResponse({ ok: true })
+        return false
       })
     } catch {
       // Ignore stale content scripts after extension reloads.
@@ -180,11 +190,6 @@ async function start() {
   }
 
   // 3. Mount the overlay in a Shadow DOM to isolate styles from the host page
-  const existingHost = document.getElementById('api-debugger-root')
-  if (existingHost?.shadowRoot) {
-    return
-  }
-
   const host = document.createElement('div')
   host.id = 'api-debugger-root'
   const shadow = host.attachShadow({ mode: 'open' })

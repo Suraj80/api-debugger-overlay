@@ -707,13 +707,15 @@
 
 .api-diff-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr;
+  gap: 12px;
 }
 
 .api-diff-panel {
-  max-height: 240px;
+  min-height: 320px;
+  max-height: 56vh;
   overflow: auto;
+  resize: vertical;
   border: 1px solid var(--api-border);
   border-radius: 8px;
   background: var(--api-bg);
@@ -722,6 +724,7 @@
 .api-diff-title {
   border-bottom: 1px solid var(--api-border);
   padding: 6px 10px;
+  color: var(--api-color-primary-soft);
 }
 
 .api-diff-code {
@@ -730,12 +733,49 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .api-diff-line {
+  display: block;
   border-radius: 2px;
-  color: var(--api-text-subtle);
+  color: var(--api-text);
   padding: 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.api-diff-prefix,
+.api-diff-punct {
+  color: var(--api-text-subtle);
+}
+
+.api-diff-key {
+  color: var(--api-color-primary-soft);
+}
+
+.api-diff-string {
+  color: var(--api-success);
+}
+
+.api-diff-number {
+  color: #89c2ff;
+}
+
+.api-diff-boolean {
+  color: var(--api-warning);
+}
+
+.api-diff-null {
+  color: var(--api-text-subtle);
+  font-style: italic;
+}
+
+.api-diff-text {
+  color: var(--api-text);
 }
 
 .api-diff-line.is-add {
@@ -858,4 +898,3 @@
     transition-duration: 0.001ms !important;
   }
 }
-

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RequestEntry, ReplayRequest, ReplayResult } from '../../src/shared/types'
+import type { ReplayAck, ReplayRequest, RequestEntry } from '../../src/shared/types'
 
 type RuntimeMessageListener = (
   message: any,
@@ -226,8 +226,13 @@ describe('background session helpers', () => {
     expect(inferDependencies(downstream, [upstream])).toEqual(['upstream'])
   })
 
-  it('routes replay requests back into the tab and returns fallback errors on failure', async () => {
+  it('runs replay requests from the background and publishes progress', async () => {
     const chromeMock = installChromeMock()
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
     await import('../../src/background/index')
     const listener = chromeMock.getRuntimeMessageListener()
 
@@ -242,31 +247,74 @@ describe('background session helpers', () => {
       originalResponseBody: '{"ok":false}',
     }
 
-    chromeMock.tabs.sendMessage.mockResolvedValueOnce({
-      status: 201,
-      duration: 88,
-      responseBody: '{"ok":true}',
-      responseHeaders: { 'content-type': 'application/json' },
-    } satisfies ReplayResult)
-
-    const successful = await new Promise<ReplayResult>(resolve => {
-      const keepAlive = listener?.({ type: 'RUN_REPLAY', tabId: 9, payload: replay }, {}, result => resolve(result as ReplayResult))
-      expect(keepAlive).toBe(true)
+    const successful = await new Promise<ReplayAck>(resolve => {
+      const keepAlive = listener?.({ type: 'RUN_REPLAY', tabId: 9, payload: replay }, {}, result => resolve(result as ReplayAck))
+      expect(keepAlive).toBe(false)
     })
 
-    expect(chromeMock.tabs.sendMessage).toHaveBeenCalledWith(9, {
-      type: 'EXECUTE_REPLAY',
-      payload: replay,
+    expect(successful.ok).toBe(true)
+    expect(successful.jobId).toBeTypeOf('string')
+    await Promise.resolve()
+    await Promise.resolve()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fetchMock).toHaveBeenCalledWith('https://api.example.com/replay', expect.objectContaining({
+      method: 'POST',
+      body: '{"ok":true}',
+      credentials: 'include',
+    }))
+    expect(chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'REPLAY_PROGRESS',
+      tabId: 9,
+      payload: {
+        jobId: successful.jobId,
+        phase: 'started',
+      },
     })
-    expect(successful.status).toBe(201)
-
-    chromeMock.tabs.sendMessage.mockRejectedValueOnce(new Error('tab missing'))
-
-    const failed = await new Promise<ReplayResult>(resolve => {
-      listener?.({ type: 'RUN_REPLAY', tabId: 9, payload: replay }, {}, result => resolve(result as ReplayResult))
+    expect(chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'REPLAY_PROGRESS',
+      tabId: 9,
+      payload: expect.objectContaining({
+        jobId: successful.jobId,
+        phase: 'headers',
+        result: expect.objectContaining({
+          status: 201,
+          responseBody: null,
+        }),
+      }),
+    })
+    expect(chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'REPLAY_PROGRESS',
+      tabId: 9,
+      payload: expect.objectContaining({
+        jobId: successful.jobId,
+        phase: 'complete',
+        result: expect.objectContaining({
+          status: 201,
+          responseBody: '{"ok":true}',
+        }),
+      }),
     })
 
-    expect(failed.status).toBe(0)
-    expect(failed.responseBody).toContain('tab missing')
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const failed = await new Promise<ReplayAck>(resolve => {
+      listener?.({ type: 'RUN_REPLAY', tabId: 9, payload: replay }, {}, result => resolve(result as ReplayAck))
+    })
+
+    expect(failed.ok).toBe(true)
+    await Promise.resolve()
+    expect(chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'REPLAY_PROGRESS',
+      tabId: 9,
+      payload: expect.objectContaining({
+        jobId: failed.jobId,
+        phase: 'error',
+        result: expect.objectContaining({
+          status: 0,
+          responseBody: expect.stringContaining('Failed to fetch'),
+        }),
+      }),
+    })
+    vi.unstubAllGlobals()
   })
 })

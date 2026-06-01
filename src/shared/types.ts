@@ -54,6 +54,7 @@ export interface ReplayRequest {
   headers: Record<string, string>
   body: string | null
   originalResponseBody: string | null
+  jobId?: string
 }
 
 export interface ReplayResult {
@@ -61,6 +62,19 @@ export interface ReplayResult {
   duration: number
   responseBody: string | null
   responseHeaders: Record<string, string>
+}
+
+export interface ReplayAck {
+  ok: boolean
+  jobId: string
+}
+
+export type ReplayPhase = 'started' | 'headers' | 'complete' | 'error'
+
+export interface ReplayProgressPayload {
+  jobId: string
+  phase: ReplayPhase
+  result?: ReplayResult
 }
 
 export interface AISuggestionRequest {
@@ -101,6 +115,7 @@ export type ExtensionMessage =
   | { type: 'SELECT_REPLAY'; payload: ReplayRequest }
   | { type: 'GET_REPLAY_TARGET'; tabId?: number }
   | { type: 'REPLAY_TARGET_SELECTED'; tabId: number; payload: ReplayRequest }
+  | { type: 'REPLAY_PROGRESS'; tabId: number; payload: ReplayProgressPayload }
   | { type: 'RUN_REPLAY'; tabId: number; payload: ReplayRequest }
   | { type: 'EXECUTE_REPLAY'; payload: ReplayRequest }
   | { type: 'OPEN_SIDE_PANEL' }
