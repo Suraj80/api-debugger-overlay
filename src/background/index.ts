@@ -5,7 +5,6 @@ import type {
   ReplayAck,
   ReplayProgressPayload,
   ReplayRequest,
-  RequestDetailTargetSnapshot,
   ReplayTargetSnapshot,
   RequestEntry,
   SessionSnapshot,
@@ -30,7 +29,6 @@ const AI_TEST_MODEL = 'gpt-5.4-mini'
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayTargetState>()
-const requestDetailTargetsByTab = new Map<number, string>()
 const pausedOverlayTabs = new Set<number>()
 const requestReceivedAt = new Map<string, number>()
 const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
@@ -989,31 +987,11 @@ async function getReplayTargetSnapshot(tabId?: number): Promise<ReplayTargetSnap
   }
 }
 
-async function getRequestDetailTargetSnapshot(tabId?: number): Promise<RequestDetailTargetSnapshot> {
-  const activeTabId = tabId ?? await getActiveTabId()
-  const resolvedTabId = pickTrackedTabId(activeTabId, requestDetailTargetsByTab.keys())
-
-  return {
-    tabId: resolvedTabId,
-    requestId: resolvedTabId == null ? null : requestDetailTargetsByTab.get(resolvedTabId) ?? null,
-  }
-}
-
 function publishReplayTarget(tabId: number, request: ReplayRequest) {
   chrome.runtime.sendMessage({
     type: 'REPLAY_TARGET_SELECTED',
     tabId,
     payload: request,
-  }).catch(() => {
-    // No extension page is currently listening.
-  })
-}
-
-function publishRequestDetailTarget(tabId: number, requestId: string) {
-  chrome.runtime.sendMessage({
-    type: 'REQUEST_DETAIL_SELECTED',
-    tabId,
-    payload: { requestId },
   }).catch(() => {
     // No extension page is currently listening.
   })
@@ -1254,7 +1232,6 @@ chrome.tabs.onRemoved.addListener(tabId => {
   sessionsByTab.delete(tabId)
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
-  requestDetailTargetsByTab.delete(tabId)
   pausedOverlayTabs.delete(tabId)
   networkEventsByTab.delete(tabId)
   clearAllPendingRequests(tabId)
@@ -1267,7 +1244,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   sessionsByTab.delete(tabId)
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
-  requestDetailTargetsByTab.delete(tabId)
   networkEventsByTab.delete(tabId)
   clearAllPendingRequests(tabId)
   cdpRequestsByTab.delete(tabId)
@@ -1312,11 +1288,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'GET_REPLAY_TARGET') {
     getReplayTargetSnapshot(message.tabId).then(sendResponse)
-    return true
-  }
-
-  if (message.type === 'GET_REQUEST_DETAIL_TARGET') {
-    getRequestDetailTargetSnapshot(message.tabId).then(sendResponse)
     return true
   }
 
@@ -1390,20 +1361,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false
   }
 
-  if (message.type === 'SELECT_REQUEST_DETAILS') {
-    requestDetailTargetsByTab.set(sender.tab.id, message.payload.requestId)
-    publishRequestDetailTarget(sender.tab.id, message.payload.requestId)
-    chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => {
-      // Side panel open can fail if Chrome does not treat the source as a user gesture.
-    })
-    return false
-  }
-
   if (message.type === 'CLEAR_SESSION') {
     sessionsByTab.delete(sender.tab.id)
     duplicateGroupsByTab.delete(sender.tab.id)
     replayTargetsByTab.delete(sender.tab.id)
-    requestDetailTargetsByTab.delete(sender.tab.id)
     networkEventsByTab.delete(sender.tab.id)
     clearAllPendingRequests(sender.tab.id)
     cdpRequestsByTab.delete(sender.tab.id)

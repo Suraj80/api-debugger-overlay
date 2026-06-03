@@ -115,9 +115,6 @@ export type ExtensionMessage =
   | { type: 'SELECT_REPLAY'; payload: ReplayRequest }
   | { type: 'GET_REPLAY_TARGET'; tabId?: number }
   | { type: 'REPLAY_TARGET_SELECTED'; tabId: number; payload: ReplayRequest }
-  | { type: 'SELECT_REQUEST_DETAILS'; payload: { requestId: string } }
-  | { type: 'GET_REQUEST_DETAIL_TARGET'; tabId?: number }
-  | { type: 'REQUEST_DETAIL_SELECTED'; tabId: number; payload: { requestId: string } }
   | { type: 'REPLAY_PROGRESS'; tabId: number; payload: ReplayProgressPayload }
   | { type: 'RUN_REPLAY'; tabId: number; payload: ReplayRequest }
   | { type: 'EXECUTE_REPLAY'; payload: ReplayRequest }
@@ -132,11 +129,6 @@ export interface SessionSnapshot {
 export interface ReplayTargetSnapshot {
   tabId: number | null
   request: ReplayRequest | null
-}
-
-export interface RequestDetailTargetSnapshot {
-  tabId: number | null
-  requestId: string | null
 }
 
 export interface OverlayStateSnapshot {

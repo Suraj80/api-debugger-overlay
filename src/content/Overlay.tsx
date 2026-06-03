@@ -1468,13 +1468,6 @@ function RequestRow({ req }: { req: RequestEntry }) {
     })
   }
 
-  const openDetailsInSidepanel = () => {
-    void sendRuntimeMessage({
-      type: 'SELECT_REQUEST_DETAILS',
-      payload: { requestId: req.id },
-    })
-  }
-
   const triggerAI = async () => {
     setAiState('loading')
     setAiError('')
@@ -1650,7 +1643,6 @@ function RequestRow({ req }: { req: RequestEntry }) {
           <div className="apidbg-detail-actions">
             <TimingSourceBadge source={req.timingSource} />
             <button className="apidbg-primary-button" onClick={triggerAI}>Ask AI</button>
-            <button className="apidbg-secondary-button" onClick={openDetailsInSidepanel}>Details</button>
             <button className="apidbg-secondary-button" onClick={replayRequest}>Replay</button>
           </div>
 
