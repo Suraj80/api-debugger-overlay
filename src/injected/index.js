@@ -475,13 +475,12 @@ function getPathname(url) {
 }
 
 function urlsRoughlyMatch(left, right) {
-  const absoluteLeft = absoluteUrl(left)
-  const absoluteRight = absoluteUrl(right)
+  const normalizedLeft = normalizeUrl(absoluteUrl(left))
+  const normalizedRight = normalizeUrl(absoluteUrl(right))
 
   return (
-    absoluteLeft === absoluteRight ||
-    decodeUrl(absoluteLeft) === decodeUrl(absoluteRight) ||
-    getPathname(absoluteLeft) === getPathname(absoluteRight)
+    normalizedLeft === normalizedRight ||
+    decodeUrl(normalizedLeft) === decodeUrl(normalizedRight)
   )
 }
 
@@ -556,7 +555,7 @@ function matchPerformanceEntry(entry) {
 function processPerformanceEntries(entries) {
   for (const entry of entries) {
     if (entry.entryType !== 'resource') continue
-    if (entry.initiatorType !== 'fetch' && entry.initiatorType !== 'xmlhttprequest' && entry.initiatorType !== 'other') continue
+    if (entry.initiatorType !== 'fetch' && entry.initiatorType !== 'xmlhttprequest') continue
 
     matchPerformanceEntry(entry)
   }

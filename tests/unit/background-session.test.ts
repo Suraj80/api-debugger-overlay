@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReplayAck, ReplayRequest, RequestEntry } from '../../src/shared/types'
+import type { ReplayAck, ReplayRequest, RequestEntry, TimingUpdatePayload } from '../../src/shared/types'
 
 type RuntimeMessageListener = (
   message: any,
@@ -225,6 +225,71 @@ describe('background session helpers', () => {
     })
 
     expect(inferDependencies(downstream, [upstream])).toEqual(['upstream'])
+  })
+
+  it('clamps browser duration to proxy timing for oversized localhost measurements', async () => {
+    installChromeMock()
+    const { mergeRequestTiming } = await import('../../src/background/index')
+
+    const proxyRequest = createRequest({
+      url: 'http://localhost:3000/api/v1/dashboard',
+      duration: 620,
+      timingSource: 'proxy',
+    })
+    const browserTiming: TimingUpdatePayload = {
+      id: proxyRequest.id,
+      url: proxyRequest.url,
+      duration: 1080,
+      startTime: proxyRequest.startTime,
+      ttfb: 410,
+      dnsTime: 0,
+      connectTime: 0,
+      sslTime: 0,
+      requestTime: 410,
+      responseTime: 670,
+      responseSize: proxyRequest.responseSize,
+      decodedBodySize: proxyRequest.decodedBodySize,
+      transferSize: proxyRequest.transferSize,
+      timingSource: 'performance',
+    }
+
+    const merged = mergeRequestTiming(proxyRequest, browserTiming)
+
+    expect(merged.duration).toBe(620)
+    expect(merged.timingSource).toBe('performance')
+    expect(merged.ttfb).toBe(410)
+  })
+
+  it('keeps browser duration for non-local requests', async () => {
+    installChromeMock()
+    const { mergeRequestTiming } = await import('../../src/background/index')
+
+    const proxyRequest = createRequest({
+      url: 'https://api.example.com/users/42',
+      duration: 620,
+      timingSource: 'proxy',
+    })
+    const browserTiming: TimingUpdatePayload = {
+      id: proxyRequest.id,
+      url: proxyRequest.url,
+      duration: 1080,
+      startTime: proxyRequest.startTime,
+      ttfb: 410,
+      dnsTime: 12,
+      connectTime: 40,
+      sslTime: 20,
+      requestTime: 410,
+      responseTime: 670,
+      responseSize: proxyRequest.responseSize,
+      decodedBodySize: proxyRequest.decodedBodySize,
+      transferSize: proxyRequest.transferSize,
+      timingSource: 'performance',
+    }
+
+    const merged = mergeRequestTiming(proxyRequest, browserTiming)
+
+    expect(merged.duration).toBe(1080)
+    expect(merged.timingSource).toBe('performance')
   })
 
   it('runs replay requests from the background and publishes progress', async () => {

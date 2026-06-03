@@ -22,6 +22,8 @@ const NETWORK_MATCH_WINDOW_MS = 5000
 const PENDING_REQUEST_FALLBACK_MS = 1000
 const PENDING_REQUEST_CLEANUP_MS = 5000
 const CDP_MATCH_WINDOW_MS = 5000
+const LOCALHOST_DURATION_CLAMP_DELTA_MS = 150
+const LOCALHOST_DURATION_CLAMP_RATIO = 1.2
 const AI_RATE_LIMIT_MS = 10000
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 const AI_MODEL = 'gpt-5.4-mini'
@@ -230,18 +232,58 @@ function schedulePendingCleanup(tabId: number, requestId: string, state: Pending
   }, PENDING_REQUEST_CLEANUP_MS) as unknown as number
 }
 
-function mergeRequestTiming(proxy: RequestEntry, timing?: TimingUpdatePayload): RequestEntry {
+function isLoopbackRequest(url: string) {
+  try {
+    const { hostname } = new URL(url)
+    const normalizedHost = hostname.toLowerCase()
+
+    return (
+      normalizedHost === 'localhost' ||
+      normalizedHost.endsWith('.localhost') ||
+      normalizedHost === '127.0.0.1' ||
+      normalizedHost === '0.0.0.0' ||
+      normalizedHost === '::1'
+    )
+  } catch {
+    return false
+  }
+}
+
+function shouldClampLoopbackPerformanceDuration(proxy: RequestEntry, timing: TimingUpdatePayload) {
+  if (timing.timingSource !== 'performance') return false
+  if (proxy.duration <= 0 || timing.duration <= proxy.duration) return false
+  if (!isLoopbackRequest(timing.url || proxy.url)) return false
+
+  const durationDelta = timing.duration - proxy.duration
+  return durationDelta >= LOCALHOST_DURATION_CLAMP_DELTA_MS && timing.duration >= proxy.duration * LOCALHOST_DURATION_CLAMP_RATIO
+}
+
+export function mergeRequestTiming(proxy: RequestEntry, timing?: TimingUpdatePayload): RequestEntry {
   if (!timing) return proxy
+  const clampLoopbackDuration = shouldClampLoopbackPerformanceDuration(proxy, timing)
+  const mergedDuration = clampLoopbackDuration
+    ? proxy.duration
+    : timing.duration > 0
+      ? timing.duration
+      : proxy.duration
 
   const timingSource: TimingSource = timing.timingSource === 'cdp'
     ? 'cdp'
-    : timing.duration > 0
+    : (
+        timing.duration > 0 ||
+        timing.ttfb > 0 ||
+        timing.dnsTime > 0 ||
+        timing.connectTime > 0 ||
+        timing.sslTime > 0 ||
+        timing.requestTime > 0 ||
+        timing.responseTime > 0
+      )
       ? 'performance'
       : proxy.timingSource
 
   return {
     ...proxy,
-    duration: timing.duration > 0 ? timing.duration : proxy.duration,
+    duration: mergedDuration,
     startTime: timing.startTime > 0 ? timing.startTime : proxy.startTime,
     responseSize: timing.responseSize > 0 ? timing.responseSize : proxy.responseSize,
     decodedBodySize: timing.decodedBodySize > 0 ? timing.decodedBodySize : proxy.decodedBodySize,
