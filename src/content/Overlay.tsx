@@ -118,7 +118,7 @@ const overlayThemeCss = `
     z-index: 2147483647;
     display: flex;
     width: 380px;
-    max-height: 60vh;
+    height: min(60vh, 640px);
     overflow: hidden;
     flex-direction: column;
     border: 1px solid var(--api-border);
@@ -219,6 +219,28 @@ const overlayThemeCss = `
     height: 14px;
     flex-shrink: 0;
     stroke: currentColor;
+  }
+
+  .apidbg-header-button {
+    height: 22px;
+    border: 1px solid var(--api-border);
+    border-radius: 5px;
+    background: var(--api-surface);
+    color: var(--api-text-subtle);
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0 8px;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .apidbg-header-button:hover,
+  .apidbg-header-button:focus-visible {
+    border-color: var(--api-border-strong);
+    background: var(--api-surface-raised);
+    color: var(--api-color-primary-soft);
+    outline: none;
   }
 
   .apidbg-chip-row {
@@ -434,12 +456,15 @@ const overlayThemeCss = `
   }
 
   .apidbg-json-box {
-    max-height: 280px;
+    height: 132px;
+    min-height: 120px;
+    max-height: 320px;
     overflow-y: auto;
     border: 1px solid var(--api-border);
     border-radius: 6px 6px 0 0;
     background: #18151d;
     padding: 8px;
+    resize: vertical;
   }
 
   .apidbg-json-footer {
@@ -559,12 +584,12 @@ const overlayThemeCss = `
     border: 1px solid var(--api-border);
     border-radius: 6px;
     background: var(--api-surface);
-    padding: 6px 8px;
+    padding: 5px 7px;
   }
 
   .apidbg-meta-label {
     color: var(--api-text-subtle);
-    font-size: 10px;
+    font-size: 9px;
     text-transform: uppercase;
   }
 
@@ -572,7 +597,7 @@ const overlayThemeCss = `
     margin-top: 2px;
     color: var(--api-text-muted);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 700;
   }
 
@@ -702,15 +727,6 @@ const overlayThemeCss = `
 
   .apidbg-ai-footer {
     margin-top: 8px;
-  }
-
-  .apidbg-footer {
-    display: flex;
-    justify-content: flex-end;
-    flex-shrink: 0;
-    border-top: 1px solid var(--api-border);
-    background: var(--api-bg);
-    padding: 6px 12px;
   }
 
   .apidbg-minimised {
@@ -924,33 +940,6 @@ function Duration({ ms }: { ms: number }) {
   const display = ms > 999 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 
   return <span className="apidbg-duration" style={{ '--badge-color': color } as React.CSSProperties}>{display}</span>
-}
-
-function TimingSourceBadge({ source }: { source: RequestEntry['timingSource'] }) {
-  const label = source === 'cdp' ? 'CDP' : source === 'performance' ? 'Browser' : 'Proxy'
-  const style = source === 'cdp'
-    ? {
-        '--badge-bg': 'rgba(98, 214, 157, 0.14)',
-        '--badge-border': 'rgba(98, 214, 157, 0.4)',
-        '--badge-color': '#8fe6bc',
-      }
-    : source === 'performance'
-    ? {
-        '--badge-bg': 'rgba(77, 163, 255, 0.14)',
-        '--badge-border': 'rgba(77, 163, 255, 0.4)',
-        '--badge-color': '#89c2ff',
-      }
-    : {
-        '--badge-bg': 'rgba(201, 167, 77, 0.16)',
-        '--badge-border': 'rgba(201, 167, 77, 0.38)',
-        '--badge-color': 'var(--api-warning)',
-      }
-
-  return (
-    <span className="apidbg-badge" style={style as React.CSSProperties}>
-      {label}
-    </span>
-  )
 }
 
 function TimingSourceChip({ source }: { source: RequestEntry['timingSource'] }) {
@@ -1641,7 +1630,6 @@ function RequestRow({ req }: { req: RequestEntry }) {
           </div>
 
           <div className="apidbg-detail-actions">
-            <TimingSourceBadge source={req.timingSource} />
             <button className="apidbg-primary-button" onClick={triggerAI}>Ask AI</button>
             <button className="apidbg-secondary-button" onClick={replayRequest}>Replay</button>
           </div>
@@ -1808,6 +1796,16 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
     void sendRuntimeMessage({ type: 'OPEN_SIDE_PANEL' })
   }
 
+  const clearSession = () => {
+    setSweep(true)
+    window.setTimeout(() => {
+      setRequests([])
+      bufferedRequestsRef.current = []
+      void sendRuntimeMessage({ type: 'CLEAR_SESSION' })
+      setSweep(false)
+    }, 300)
+  }
+
   const expandOverlay = () => {
     setState(pausedRef.current ? 'paused' : 'feed')
     persistShowOnLoad(true)
@@ -1865,6 +1863,16 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
               <span>API Debugger</span>
             </div>
             <div className="apidbg-actions">
+              {requests.length > 0 && (
+                <button
+                  className="apidbg-header-button"
+                  onClick={clearSession}
+                  aria-label="Clear captured requests"
+                  title="Clear"
+                >
+                  Clear
+                </button>
+              )}
               <button
                 className="apidbg-icon-button"
                 onClick={() => setPausedState(isCapturing)}
@@ -1920,25 +1928,6 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
             {requests.length === 0 ? <EmptyFeed /> : requests.map(r => <RequestRow key={r.id} req={r} />)}
           </div>
         </OverlayErrorBoundary>
-
-        {requests.length > 0 && (
-          <div className="apidbg-footer">
-            <button
-              className="apidbg-plain-button"
-              onClick={() => {
-                setSweep(true)
-                window.setTimeout(() => {
-                  setRequests([])
-                  bufferedRequestsRef.current = []
-                  void sendRuntimeMessage({ type: 'CLEAR_SESSION' })
-                  setSweep(false)
-                }, 300)
-              }}
-            >
-              Clear
-            </button>
-          </div>
-        )}
       </div>
     </>
   )

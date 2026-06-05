@@ -634,8 +634,8 @@ async function callOpenAi(apiKey: string, body: object) {
   return response.json()
 }
 
-async function testAiConnection(): Promise<AISuggestionResponse> {
-  const apiKey = await getOpenAiApiKey()
+async function testAiConnection(apiKeyOverride?: string): Promise<AISuggestionResponse> {
+  const apiKey = apiKeyOverride?.trim() || await getOpenAiApiKey()
   if (!apiKey) {
     return { ok: false, error: 'API key not configured. Add your OpenAI key in settings.' }
   }
@@ -1344,7 +1344,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'TEST_AI_CONNECTION') {
-    testAiConnection().then(sendResponse)
+    testAiConnection(message.payload?.apiKey).then(sendResponse)
     return true
   }
 

@@ -7,6 +7,7 @@ import '../index.css'
 import brandIcon from '../../icons/favicon-32x32.png'
 
 type TestState = 'idle' | 'loading' | 'ok' | 'err'
+type PopupTab = 'capture' | 'ai' | 'overlay'
 
 declare global {
   interface Window {
@@ -21,14 +22,17 @@ export function Popup() {
   const [preciseMode, setPreciseMode] = useState(DEFAULT_SETTINGS.preciseModeEnabled)
   const [slowMs, setSlowMs] = useState(DEFAULT_SETTINGS.slowRequestThresholdMs)
   const [largeKb, setLargeKb] = useState(DEFAULT_SETTINGS.largePayloadThresholdKb)
-  const [apiKey, setApiKey] = useState(DEFAULT_SETTINGS.apiKey)
+  const [savedApiKey, setSavedApiKey] = useState(DEFAULT_SETTINGS.apiKey)
+  const [apiKeyDraft, setApiKeyDraft] = useState(DEFAULT_SETTINGS.apiKey)
+  const [editingApiKey, setEditingApiKey] = useState(true)
   const [showKey, setShowKey] = useState(false)
   const [testState, setTestState] = useState<TestState>('idle')
   const [testMessage, setTestMessage] = useState('')
   const [position, setPosition] = useState(DEFAULT_SETTINGS.overlayPosition)
   const [showOnLoad, setShowOnLoad] = useState(DEFAULT_SETTINGS.showOverlayOnLoad)
   const [loaded, setLoaded] = useState(false)
-  const debouncedApiKey = useDebounce(apiKey, 500)
+  const [lastTestedKey, setLastTestedKey] = useState('')
+  const [activeTab, setActiveTab] = useState<PopupTab>('capture')
 
   useEffect(() => {
     getSettings().then(settings => {
@@ -38,7 +42,9 @@ export function Popup() {
       setPreciseMode(settings.preciseModeEnabled)
       setSlowMs(settings.slowRequestThresholdMs)
       setLargeKb(settings.largePayloadThresholdKb)
-      setApiKey(settings.apiKey)
+      setSavedApiKey(settings.apiKey)
+      setApiKeyDraft(settings.apiKey)
+      setEditingApiKey(!settings.apiKey.trim())
       setPosition(settings.overlayPosition)
       setShowOnLoad(settings.showOverlayOnLoad)
       setLoaded(true)
@@ -55,11 +61,11 @@ export function Popup() {
       preciseModeEnabled: preciseMode,
       slowRequestThresholdMs: slowMs,
       largePayloadThresholdKb: largeKb,
-      apiKey: debouncedApiKey,
+      apiKey: savedApiKey,
       overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
       showOverlayOnLoad: showOnLoad,
     })
-  }, [captureFetch, captureXHR, capturing, debouncedApiKey, largeKb, loaded, position, preciseMode, showOnLoad, slowMs])
+  }, [captureFetch, captureXHR, capturing, largeKb, loaded, position, preciseMode, savedApiKey, showOnLoad, slowMs])
 
   useEffect(() => {
     if (!loaded) return
@@ -73,13 +79,16 @@ export function Popup() {
   }, [loaded, preciseMode])
 
   const onApiKeyChange = (value: string) => {
-    setApiKey(value)
+    setApiKeyDraft(value)
     setTestState('idle')
     setTestMessage('')
+    setLastTestedKey('')
   }
 
   const testConnection = async () => {
-    if (!apiKey.trim()) {
+    const keyToTest = editingApiKey ? apiKeyDraft.trim() : savedApiKey.trim()
+
+    if (!keyToTest) {
       setTestState('err')
       setTestMessage('Enter an OpenAI API key before testing the connection.')
       return
@@ -89,22 +98,15 @@ export function Popup() {
     setTestMessage('')
 
     try {
-      await saveSettings({
-        captureEnabled: capturing,
-        captureFetch,
-        captureXHR,
-        preciseModeEnabled: preciseMode,
-        slowRequestThresholdMs: slowMs,
-        largePayloadThresholdKb: largeKb,
-        apiKey: apiKey.trim(),
-        overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
-        showOverlayOnLoad: showOnLoad,
-      })
-      const response = await chrome.runtime.sendMessage({ type: 'TEST_AI_CONNECTION' }) as AISuggestionResponse | undefined
+      const response = await chrome.runtime.sendMessage({
+        type: 'TEST_AI_CONNECTION',
+        payload: { apiKey: keyToTest },
+      }) as AISuggestionResponse | undefined
 
       if (response?.ok) {
         setTestState('ok')
-        setTestMessage('Connection successful.')
+        setLastTestedKey(keyToTest)
+        setTestMessage(editingApiKey ? 'Connection successful. Save this key to use Ask AI.' : 'Saved key verified successfully.')
         return
       }
 
@@ -116,6 +118,80 @@ export function Popup() {
     }
   }
 
+  const saveApiKey = async () => {
+    const trimmedApiKey = apiKeyDraft.trim()
+    if (!trimmedApiKey) {
+      setTestState('err')
+      setTestMessage('Enter an OpenAI API key before saving.')
+      return
+    }
+
+    if (testState !== 'ok' || lastTestedKey !== trimmedApiKey) {
+      setTestState('err')
+      setTestMessage('Test this key successfully before saving it.')
+      return
+    }
+
+    await saveSettings({
+      captureEnabled: capturing,
+      captureFetch,
+      captureXHR,
+      preciseModeEnabled: preciseMode,
+      slowRequestThresholdMs: slowMs,
+      largePayloadThresholdKb: largeKb,
+      apiKey: trimmedApiKey,
+      overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
+      showOverlayOnLoad: showOnLoad,
+    })
+
+    setSavedApiKey(trimmedApiKey)
+    setApiKeyDraft(trimmedApiKey)
+    setEditingApiKey(false)
+    setShowKey(false)
+    setTestState('idle')
+    setTestMessage('OpenAI key saved.')
+  }
+
+  const startEditingApiKey = () => {
+    setEditingApiKey(true)
+    setApiKeyDraft(savedApiKey)
+    setShowKey(false)
+    setTestState('idle')
+    setTestMessage('')
+    setLastTestedKey('')
+  }
+
+  const cancelEditingApiKey = () => {
+    setEditingApiKey(false)
+    setApiKeyDraft(savedApiKey)
+    setShowKey(false)
+    setTestState('idle')
+    setTestMessage('')
+    setLastTestedKey('')
+  }
+
+  const removeApiKey = async () => {
+    await saveSettings({
+      captureEnabled: capturing,
+      captureFetch,
+      captureXHR,
+      preciseModeEnabled: preciseMode,
+      slowRequestThresholdMs: slowMs,
+      largePayloadThresholdKb: largeKb,
+      apiKey: '',
+      overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
+      showOverlayOnLoad: showOnLoad,
+    })
+
+    setSavedApiKey('')
+    setApiKeyDraft('')
+    setEditingApiKey(true)
+    setShowKey(false)
+    setTestState('idle')
+    setTestMessage('OpenAI key removed.')
+    setLastTestedKey('')
+  }
+
   const resetDefaults = () => {
     setCapturing(DEFAULT_SETTINGS.captureEnabled)
     setCaptureFetch(DEFAULT_SETTINGS.captureFetch)
@@ -123,13 +199,20 @@ export function Popup() {
     setPreciseMode(DEFAULT_SETTINGS.preciseModeEnabled)
     setSlowMs(DEFAULT_SETTINGS.slowRequestThresholdMs)
     setLargeKb(DEFAULT_SETTINGS.largePayloadThresholdKb)
-    setApiKey(DEFAULT_SETTINGS.apiKey)
+    setSavedApiKey(DEFAULT_SETTINGS.apiKey)
+    setApiKeyDraft(DEFAULT_SETTINGS.apiKey)
+    setEditingApiKey(true)
     setShowKey(false)
     setTestState('idle')
     setTestMessage('')
+    setLastTestedKey('')
     setPosition(DEFAULT_SETTINGS.overlayPosition)
     setShowOnLoad(DEFAULT_SETTINGS.showOverlayOnLoad)
   }
+
+  const hasSavedApiKey = Boolean(savedApiKey.trim())
+  const canSaveApiKey = editingApiKey && testState === 'ok' && apiKeyDraft.trim() !== '' && lastTestedKey === apiKeyDraft.trim()
+  const maskedApiKey = maskApiKey(savedApiKey)
 
   return (
     <div className="api-theme-shell api-popup">
@@ -154,110 +237,203 @@ export function Popup() {
 
         {loaded && (
           <>
-        <Section title="Capture">
-          <ToggleRow label="Enable capture on this tab" value={capturing} onChange={setCapturing} />
-          <ToggleRow label="Capture fetch requests" value={captureFetch} onChange={setCaptureFetch} />
-          <ToggleRow label="Capture XHR requests" value={captureXHR} onChange={setCaptureXHR} />
-          <ToggleRow label="Precise mode" value={preciseMode} onChange={setPreciseMode} hint="Uses Chrome debugger for DevTools-level timing. Chrome will show a debugging banner on the page." />
-        </Section>
+            {activeTab === 'capture' && (
+              <div className="api-popup-panel">
+                <Section title="Capture Controls">
+                  <ToggleRow label="Enable capture on this tab" value={capturing} onChange={setCapturing} />
+                  <ToggleRow label="Capture fetch requests" value={captureFetch} onChange={setCaptureFetch} />
+                  <ToggleRow label="Capture XHR requests" value={captureXHR} onChange={setCaptureXHR} />
+                  <ToggleRow label="Precise mode" value={preciseMode} onChange={setPreciseMode} hint="Uses Chrome debugger for DevTools-level timing. Chrome will show a debugging banner on the page." />
+                </Section>
 
-        <Section title="Thresholds">
-          <SliderRow
-            label="Slow request threshold"
-            value={slowMs}
-            min={500}
-            max={5000}
-            step={100}
-            onChange={setSlowMs}
-            unit="ms"
-          />
-          <SliderRow
-            label="Large payload threshold"
-            value={largeKb}
-            min={100}
-            max={2000}
-            step={50}
-            onChange={setLargeKb}
-            unit=" KB"
-          />
-        </Section>
-
-        <Section title="AI Integration">
-          <div>
-            <div className="api-popup-field-label">OpenAI API Key</div>
-            <div className="api-popup-input-wrap">
-              <input
-                className="api-popup-key-input"
-                type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={event => onApiKeyChange(event.target.value)}
-                placeholder="sk-ant-..."
-              />
-              <button className="api-popup-eye" onClick={() => setShowKey(value => !value)} title={showKey ? 'Hide key' : 'Show key'}>
-                {showKey ? 'Hide' : 'Show'}
-              </button>
-            </div>
-            <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.openai.com.</div>
-            <button
-              className={`api-popup-test${testState === 'ok' ? ' is-ok' : ''}${testState === 'err' ? ' is-err' : ''}`}
-              onClick={testConnection}
-              disabled={testState === 'loading'}
-            >
-              {testState === 'loading' && <span className="api-spinner" />}
-              {testState === 'idle' && 'Test connection'}
-              {testState === 'loading' && 'Testing...'}
-              {testState === 'ok' && 'Connected'}
-              {testState === 'err' && 'Try again'}
-            </button>
-            {testMessage && (
-              <div
-                className="api-popup-help"
-                style={{
-                  marginTop: 8,
-                  color: testState === 'err' ? 'var(--api-danger)' : testState === 'ok' ? 'var(--api-success)' : undefined,
-                }}
-              >
-                {testMessage}
+                <Section title="Thresholds">
+                  <SliderRow
+                    label="Slow request threshold"
+                    value={slowMs}
+                    min={500}
+                    max={5000}
+                    step={100}
+                    onChange={setSlowMs}
+                    unit="ms"
+                  />
+                  <SliderRow
+                    label="Large payload threshold"
+                    value={largeKb}
+                    min={100}
+                    max={2000}
+                    step={50}
+                    onChange={setLargeKb}
+                    unit=" KB"
+                  />
+                </Section>
               </div>
             )}
-          </div>
-        </Section>
 
-        <Section title="Overlay">
-          <div className="api-popup-row">
-            <span className="api-popup-label">Default position</span>
-            <select className="api-select" value={position} onChange={event => setPosition(event.target.value)}>
-              <option>Bottom Right</option>
-              <option>Bottom Left</option>
-              <option>Top Right</option>
-              <option>Top Left</option>
-            </select>
-          </div>
-          <ToggleRow label="Show on page load" value={showOnLoad} onChange={setShowOnLoad} />
-        </Section>
+            {activeTab === 'ai' && (
+              <div className="api-popup-panel">
+                <Section title="AI Integration">
+                  <div>
+                    <div className="api-popup-field-label">OpenAI API Key</div>
+                    {editingApiKey ? (
+                      <>
+                        <div className="api-popup-input-wrap">
+                          <input
+                            className="api-popup-key-input"
+                            type={showKey ? 'text' : 'password'}
+                            value={apiKeyDraft}
+                            onChange={event => onApiKeyChange(event.target.value)}
+                            placeholder="sk-..."
+                          />
+                          <button className="api-popup-eye" onClick={() => setShowKey(value => !value)} title={showKey ? 'Hide key' : 'Show key'}>
+                            {showKey ? 'Hide' : 'Show'}
+                          </button>
+                        </div>
+                        <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.openai.com.</div>
+                        <div className="api-popup-actions">
+                          <button
+                            className={`api-popup-test${testState === 'ok' ? ' is-ok' : ''}${testState === 'err' ? ' is-err' : ''}`}
+                            onClick={testConnection}
+                            disabled={testState === 'loading'}
+                          >
+                            {testState === 'loading' && <span className="api-spinner" />}
+                            {testState === 'idle' && 'Test connection'}
+                            {testState === 'loading' && 'Testing...'}
+                            {testState === 'ok' && 'Connected'}
+                            {testState === 'err' && 'Try again'}
+                          </button>
+                          <button className="api-popup-action" onClick={saveApiKey} disabled={!canSaveApiKey}>
+                            Save key
+                          </button>
+                          {hasSavedApiKey && (
+                            <button className="api-popup-action" onClick={cancelEditingApiKey}>
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="api-popup-key-card">
+                        <div className="api-popup-key-card-status">OpenAI key saved</div>
+                        <div className="api-popup-key-card-value">{maskedApiKey}</div>
+                        <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.openai.com.</div>
+                        <div className="api-popup-actions">
+                          <button className="api-popup-action" onClick={startEditingApiKey}>
+                            Change key
+                          </button>
+                          <button
+                            className={`api-popup-test${testState === 'ok' ? ' is-ok' : ''}${testState === 'err' ? ' is-err' : ''}`}
+                            onClick={testConnection}
+                            disabled={testState === 'loading'}
+                          >
+                            {testState === 'loading' && <span className="api-spinner" />}
+                            {testState === 'loading' ? 'Testing...' : 'Test again'}
+                          </button>
+                          <button className="api-popup-action is-danger" onClick={removeApiKey}>
+                            Remove key
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {testMessage && (
+                      <div
+                        className="api-popup-help"
+                        style={{
+                          marginTop: 8,
+                          color: testState === 'err' ? 'var(--api-danger)' : testState === 'ok' ? 'var(--api-success)' : undefined,
+                        }}
+                      >
+                        {testMessage}
+                      </div>
+                    )}
+                  </div>
+                </Section>
+              </div>
+            )}
+
+            {activeTab === 'overlay' && (
+              <div className="api-popup-panel">
+                <Section title="Overlay Preferences">
+                  <div className="api-popup-row">
+                    <span className="api-popup-label">Default position</span>
+                    <select className="api-select" value={position} onChange={event => setPosition(event.target.value)}>
+                      <option>Bottom Right</option>
+                      <option>Bottom Left</option>
+                      <option>Top Right</option>
+                      <option>Top Left</option>
+                    </select>
+                  </div>
+                  <ToggleRow label="Show on page load" value={showOnLoad} onChange={setShowOnLoad} />
+                </Section>
+              </div>
+            )}
           </>
         )}
       </main>
 
       <footer className="api-popup-footer">
-        <span className="api-popup-version">
-          v{chrome.runtime.getManifest().version}
-        </span>
-        <button className="api-reset-button" onClick={resetDefaults} disabled={!loaded}>Reset to defaults</button>
+        <div className="api-popup-tabs api-popup-tabs-footer" role="tablist" aria-label="Popup sections">
+          <TabButton
+            label="Capture"
+            value="capture"
+            activeTab={activeTab}
+            onSelect={setActiveTab}
+          />
+          <TabButton
+            label="AI"
+            value="ai"
+            activeTab={activeTab}
+            onSelect={setActiveTab}
+          />
+          <TabButton
+            label="Overlay"
+            value="overlay"
+            activeTab={activeTab}
+            onSelect={setActiveTab}
+          />
+        </div>
+        <button
+          className="api-reset-button"
+          onClick={resetDefaults}
+          disabled={!loaded}
+          title="Reset to defaults"
+          aria-label="Reset to defaults"
+        >
+          <span>Reset</span>
+        </button>
       </footer>
     </div>
   )
 }
 
-function useDebounce<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = React.useState(value)
+function maskApiKey(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (trimmed.length <= 7) return trimmed
+  return `${trimmed.slice(0, 3)}...${trimmed.slice(-4)}`
+}
 
-  React.useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delay)
-    return () => clearTimeout(timer)
-  }, [value, delay])
-
-  return debounced
+function TabButton({
+  label,
+  value,
+  activeTab,
+  onSelect,
+}: {
+  label: string
+  value: PopupTab
+  activeTab: PopupTab
+  onSelect: (value: PopupTab) => void
+}) {
+  return (
+    <button
+      className={`api-popup-tab api-popup-tab-${value}${activeTab === value ? ' is-active' : ''}`}
+      onClick={() => onSelect(value)}
+      role="tab"
+      type="button"
+      aria-selected={activeTab === value}
+    >
+      <span>{label}</span>
+    </button>
+  )
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
