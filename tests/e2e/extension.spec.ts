@@ -24,6 +24,7 @@ async function startTestServer() {
             <button id="abort-request">Abort request</button>
             <button id="binary-request">Binary request</button>
             <button id="form-request">Form request</button>
+            <button id="burst-request">Burst requests</button>
             <script>
               document.querySelector('#fetch-users').addEventListener('click', async () => {
                 await fetch('/api/users?b=2&a=1')
@@ -63,6 +64,13 @@ async function startTestServer() {
                 form.append('name', 'Ada')
                 form.append('role', 'engineer')
                 await fetch('/api/form', { method: 'POST', body: form })
+              })
+              document.querySelector('#burst-request').addEventListener('click', async () => {
+                await Promise.all(
+                  Array.from({ length: 120 }, (_, index) => (
+                    fetch('/api/burst?i=' + index)
+                  )),
+                )
               })
             </script>
           </body>
@@ -148,6 +156,16 @@ async function startTestServer() {
 
     if (url.pathname === '/api/form') {
       const body = JSON.stringify({ ok: true })
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
+    }
+
+    if (url.pathname === '/api/burst') {
+      const body = JSON.stringify({ ok: true, index: Number(url.searchParams.get('i') ?? '0') })
       res.writeHead(200, {
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(body),
@@ -272,6 +290,10 @@ test.describe('API Debugger extension', () => {
     await usersRow.press('Enter')
 
     await expect(overlay(page).locator('[role="tree"]')).toBeVisible()
+    await expect(overlay(page).locator('.apidbg-detail-toolbar')).toBeVisible()
+    await expect(overlay(page).locator('.apidbg-metadata-bar')).toBeVisible()
+    await expect(overlay(page).locator('.apidbg-json-editor')).toBeVisible()
+    await expect(overlay(page).locator('.apidbg-detail-actions')).toBeVisible()
     await expect(overlay(page).locator('.apidbg-json-copy', { hasText: 'Path' }).first()).toBeVisible()
   })
 
@@ -380,5 +402,65 @@ test.describe('API Debugger extension', () => {
     expect(mediumBox!.height).toBeLessThan(largeBox!.height)
 
     await popupPage.close()
+  })
+
+  test('supports minimising the graph and hiding it from popup preferences', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    const serviceWorker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
+    const extensionId = new URL(serviceWorker.url()).host
+    const popupPage = await context.newPage()
+    await popupPage.goto(`chrome-extension://${extensionId}/src/popup/index.html`)
+    await popupPage.getByRole('tab', { name: 'Overlay', exact: true }).click()
+
+    const graphToggle = popupPage.getByRole('button', { name: 'Show response graph', exact: true })
+    await expect(graphToggle).toHaveAttribute('aria-pressed', 'true')
+    await popupPage.close()
+
+    await page.locator('#fetch-users').click()
+    await page.locator('#xhr-profile').click()
+    await page.locator('#large-payload').click()
+
+    await expect(overlay(page)).toContainText('/api/users')
+    await expect(overlay(page)).toContainText('/api/profile')
+    await expect(overlay(page)).toContainText('/api/large')
+
+    const chartCard = overlay(page).locator('.apidbg-chart-card')
+    await expect(chartCard).toBeVisible()
+    await expect(chartCard.locator('canvas')).toBeVisible()
+
+    const minimiseGraph = overlay(page).getByRole('button', { name: 'Minimise graph', exact: true })
+    await minimiseGraph.click()
+    await expect(chartCard.locator('canvas')).toHaveCount(0)
+    await expect(overlay(page).getByRole('button', { name: 'Show graph', exact: true })).toBeVisible()
+
+    await overlay(page).getByRole('button', { name: 'Show graph', exact: true }).click()
+    await expect(chartCard.locator('canvas')).toBeVisible()
+
+    const popupPageAgain = await context.newPage()
+    await popupPageAgain.goto(`chrome-extension://${extensionId}/src/popup/index.html`)
+    await popupPageAgain.getByRole('tab', { name: 'Overlay', exact: true }).click()
+    await popupPageAgain.getByRole('button', { name: 'Show response graph', exact: true }).click()
+    await expect(chartCard).toHaveCount(0)
+
+    await popupPageAgain.getByRole('button', { name: 'Show response graph', exact: true }).click()
+    await expect(chartCard).toBeVisible()
+    await expect(chartCard.locator('canvas')).toBeVisible()
+
+    await popupPageAgain.close()
+  })
+
+  test('keeps total calls above 100 even when the visible request list is capped', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    await page.locator('#burst-request').click()
+
+    await expect(overlay(page)).toContainText('120')
+    await expect(overlay(page)).toContainText('/api/burst?i=119')
+
+    const rows = overlay(page).locator('.apidbg-row')
+    await expect(rows).toHaveCount(100)
   })
 })

@@ -12,6 +12,7 @@ export interface ApiDebuggerSettings {
   overlayPosition: OverlayPosition
   overlaySize: OverlaySize
   showOverlayOnLoad: boolean
+  showOverlayGraph: boolean
 }
 
 export const API_DEBUGGER_SETTINGS_KEY = 'apiDebuggerSettings'
@@ -40,6 +41,7 @@ export const DEFAULT_SETTINGS: ApiDebuggerSettings = {
   overlayPosition: 'Bottom Right',
   overlaySize: 'Large',
   showOverlayOnLoad: true,
+  showOverlayGraph: true,
 }
 
 export function normalizeSettings(value: Partial<ApiDebuggerSettings> | undefined): ApiDebuggerSettings {
