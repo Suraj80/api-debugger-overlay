@@ -13,6 +13,7 @@ import type {
 } from '../shared/types'
 import { getSettings } from '../shared/settings'
 import '../index.css'
+import brandIcon from '../../icons/favicon-32x32.png'
 
 type Tab = 'session' | 'deps' | 'replay'
 type DiffLine = { text: string; kind: 'same' | 'add' | 'del' }
@@ -192,18 +193,29 @@ export function SidePanel() {
 
   return (
     <div className="api-theme-shell api-sidepanel">
-      <nav className="api-sidepanel-tabs" aria-label="Side panel views">
-        {visibleTabs.map(([key, label]) => (
-          <button
-            key={key}
-            className={`api-sidepanel-tab${tab === key ? ' is-active' : ''}`}
-            onClick={() => setTab(key)}
-            aria-pressed={tab === key}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      <header className="api-sidepanel-header">
+        <div className="api-sidepanel-brand">
+          <span className="api-sidepanel-brand-mark">
+            <img src={brandIcon} alt="" />
+          </span>
+          <span className="api-sidepanel-brand-copy">
+            <strong>API Debugger</strong>
+            <span>Live Network Intelligence</span>
+          </span>
+        </div>
+        <nav className="api-sidepanel-tabs" aria-label="Side panel views">
+          {visibleTabs.map(([key, label]) => (
+            <button
+              key={key}
+              className={`api-sidepanel-tab${tab === key ? ' is-active' : ''}`}
+              onClick={() => setTab(key)}
+              aria-pressed={tab === key}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      </header>
 
       <main className="api-sidepanel-content api-scroll">
         {tab === 'session' && <SessionTab requests={requests} />}
@@ -257,9 +269,9 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
   return (
     <div>
       <div className="api-sidepanel-card-grid">
-        <StatCard title="Total Requests" value={String(total)} subtext={`${perMin}/min`} />
-        <StatCard title="Avg Latency" value={formatMs(avg)} subtext="time to response" valueColor={avgColor} />
-        <StatCard title="Error Rate" value={`${errorRate}%`} subtext="4xx + 5xx / total" valueColor={errColor} />
+        <StatCard title="Total Requests" value={String(total)} subtext={`${perMin}/min`} accentColor="#9b7cff" />
+        <StatCard title="Avg Latency" value={formatMs(avg)} subtext="time to response" valueColor={avgColor} accentColor={avgColor} />
+        <StatCard title="Error Rate" value={`${errorRate}%`} subtext="4xx + 5xx / total" valueColor={errColor} accentColor={errColor} />
       </div>
 
       <section className="api-sidepanel-section">
@@ -836,9 +848,21 @@ function ReplayTab({
   )
 }
 
-function StatCard({ title, value, subtext, valueColor = 'var(--api-text)' }: { title: string; value: string; subtext: string; valueColor?: string }) {
+function StatCard({
+  title,
+  value,
+  subtext,
+  valueColor = 'var(--api-text)',
+  accentColor = 'var(--api-color-primary)',
+}: {
+  title: string
+  value: string
+  subtext: string
+  valueColor?: string
+  accentColor?: string
+}) {
   return (
-    <div className="api-stat-card">
+    <div className="api-stat-card" style={{ '--stat-accent': accentColor } as React.CSSProperties}>
       <div className="api-stat-title">{title}</div>
       <div className="api-stat-value" style={{ '--stat-color': valueColor } as React.CSSProperties}>{value}</div>
       <div className="api-stat-subtext">{subtext}</div>
@@ -868,22 +892,22 @@ function LatencyChart({ requests }: { requests: RequestEntry[] }) {
     if (!ctx) return
 
     const styles = getComputedStyle(canvas)
-    const primary = styles.getPropertyValue('--api-color-primary-soft').trim() || '#cbb8ff'
-    const border = styles.getPropertyValue('--api-border-strong').trim() || '#5d536b'
-    const muted = styles.getPropertyValue('--api-text-subtle').trim() || '#79737f'
-    const success = styles.getPropertyValue('--api-success').trim() || '#8fe6bc'
-    const warning = styles.getPropertyValue('--api-warning').trim() || '#ffd36f'
-    const danger = styles.getPropertyValue('--api-danger').trim() || '#ff8f8f'
-    const chartLeft = 42
-    const chartRight = 8
-    const chartTop = 8
-    const chartBottom = 8
+    const primary = styles.getPropertyValue('--api-chart-line').trim() || '#8b6cff'
+    const grid = styles.getPropertyValue('--api-chart-grid').trim() || 'rgba(130, 153, 183, 0.12)'
+    const muted = styles.getPropertyValue('--api-text-subtle').trim() || '#718096'
+    const success = styles.getPropertyValue('--api-success').trim() || '#53e6a4'
+    const warning = styles.getPropertyValue('--api-warning').trim() || '#ffbf4b'
+    const danger = styles.getPropertyValue('--api-danger').trim() || '#ff786f'
+    const chartLeft = 48
+    const chartRight = 14
+    const chartTop = 14
+    const chartBottom = 14
 
     ctx.scale(dpr, dpr)
     ctx.clearRect(0, 0, width, height)
     if (requests.length === 0) return
 
-    const max = Math.max(...requests.map(request => request.duration), 2000)
+    const max = Math.max(Math.ceil(Math.max(...requests.map(request => request.duration)) * 1.12), 400)
     const chartWidth = Math.max(0, width - chartLeft - chartRight)
     const chartHeight = Math.max(0, height - chartTop - chartBottom)
     const axisTicks = Array.from(new Set([
@@ -901,9 +925,9 @@ function LatencyChart({ requests }: { requests: RequestEntry[] }) {
 
     axisTicks.forEach(threshold => {
       const y = height - (threshold / max) * chartHeight - chartBottom
-      ctx.setLineDash([4, 4])
-      ctx.strokeStyle = border
-      ctx.globalAlpha = 0.35
+      ctx.setLineDash([4, 5])
+      ctx.strokeStyle = grid
+      ctx.globalAlpha = 1
       ctx.beginPath()
       ctx.moveTo(chartLeft, y)
       ctx.lineTo(width - chartRight, y)
@@ -920,19 +944,52 @@ function LatencyChart({ requests }: { requests: RequestEntry[] }) {
       request,
     }))
 
+    const tracePath = () => {
+      ctx.beginPath()
+      points.forEach((point, index) => {
+        if (index === 0) {
+          ctx.moveTo(point.x, point.y)
+          return
+        }
+
+        const previous = points[index - 1]
+        const midpoint = (previous.x + point.x) / 2
+        ctx.bezierCurveTo(midpoint, previous.y, midpoint, point.y, point.x, point.y)
+      })
+    }
+
+    const fill = ctx.createLinearGradient(0, chartTop, 0, height - chartBottom)
+    fill.addColorStop(0, 'rgba(124, 92, 255, 0.34)')
+    fill.addColorStop(0.65, 'rgba(124, 92, 255, 0.08)')
+    fill.addColorStop(1, 'rgba(124, 92, 255, 0)')
+
+    tracePath()
+    ctx.lineTo(points[points.length - 1].x, height - chartBottom)
+    ctx.lineTo(points[0].x, height - chartBottom)
+    ctx.closePath()
+    ctx.fillStyle = fill
+    ctx.fill()
+
+    tracePath()
     ctx.strokeStyle = primary
-    ctx.globalAlpha = 0.45
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    points.forEach((point, index) => (index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
+    ctx.lineWidth = 2.2
+    ctx.shadowBlur = 14
+    ctx.shadowColor = 'rgba(124, 92, 255, 0.7)'
     ctx.stroke()
-    ctx.globalAlpha = 1
+    ctx.shadowBlur = 0
 
     points.forEach(point => {
       ctx.beginPath()
-      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2)
+      ctx.arc(point.x, point.y, 5.5, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(124, 92, 255, 0.28)'
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(point.x, point.y, 3.2, 0, Math.PI * 2)
       ctx.fillStyle = point.request.status >= 400 ? warning : point.request.isSlow ? danger : success
       ctx.fill()
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = '#f3f7ff'
+      ctx.stroke()
     })
   }, [requests])
 
