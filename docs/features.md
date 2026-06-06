@@ -42,6 +42,7 @@ Settings include:
 - slow request threshold
 - large payload threshold
 - overlay position
+- overlay size preset: Large, Medium, or Small
 - show overlay on page load
 - OpenAI API key testing and saving
 

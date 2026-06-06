@@ -204,6 +204,18 @@ function overlay(page: Page) {
   return page.locator('#api-debugger-root').locator('.apidbg-overlay')
 }
 
+async function waitForCaptureReady(page: Page) {
+  await page.bringToFront()
+  await expect.poll(
+    () => page.evaluate(() => document.visibilityState),
+    { timeout: 10_000 },
+  ).toBe('visible')
+  await expect.poll(
+    () => page.evaluate(() => window.fetch.name),
+    { timeout: 10_000 },
+  ).toBe('interceptedFetch')
+}
+
 test.describe('API Debugger extension', () => {
   let server: Server
   let serverUrl: string
@@ -233,6 +245,11 @@ test.describe('API Debugger extension', () => {
   test('captures fetch, XHR, duplicates, and large payload warnings', async () => {
     await page.goto(serverUrl)
     await expect(overlay(page)).toContainText('API Debugger')
+    // The first persistent-context navigation boots the MV3 worker and content bridge.
+    // Reload once so capture assertions run against the fully initialized extension.
+    await page.reload()
+    await expect(overlay(page)).toContainText('API Debugger')
+    await waitForCaptureReady(page)
 
     await page.locator('#fetch-users').click()
     await page.locator('#xhr-profile').click()
@@ -324,5 +341,44 @@ test.describe('API Debugger extension', () => {
     await expect(overlay(page).getByRole('tree', { name: 'Request JSON tree' })).toBeVisible()
     await expect(overlay(page)).toContainText('name=Ada')
     await expect(overlay(page)).toContainText('role=engineer')
+  })
+
+  test('applies Small, Medium, and Large overlay size preferences live', async () => {
+    await page.goto(serverUrl)
+    await expect(overlay(page)).toContainText('API Debugger')
+
+    const serviceWorker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker')
+    const extensionId = new URL(serviceWorker.url()).host
+    const popupPage = await context.newPage()
+    await popupPage.goto(`chrome-extension://${extensionId}/src/popup/index.html`)
+    await popupPage.getByRole('tab', { name: 'Overlay', exact: true }).click()
+
+    const selectOverlaySize = async (size: 'Large' | 'Medium' | 'Small') => {
+      const option = popupPage.getByRole('radio', { name: size, exact: true })
+      await option.click()
+      await expect(option).toHaveAttribute('aria-checked', 'true')
+    }
+
+    await selectOverlaySize('Small')
+    await expect(overlay(page)).toHaveClass(/is-size-small/)
+    const smallBox = await overlay(page).boundingBox()
+
+    await selectOverlaySize('Medium')
+    await expect(overlay(page)).toHaveClass(/is-size-medium/)
+    const mediumBox = await overlay(page).boundingBox()
+
+    await selectOverlaySize('Large')
+    await expect(overlay(page)).toHaveClass(/is-size-large/)
+    const largeBox = await overlay(page).boundingBox()
+
+    expect(smallBox).not.toBeNull()
+    expect(mediumBox).not.toBeNull()
+    expect(largeBox).not.toBeNull()
+    expect(smallBox!.width).toBeLessThan(mediumBox!.width)
+    expect(mediumBox!.width).toBeLessThan(largeBox!.width)
+    expect(smallBox!.height).toBeLessThan(mediumBox!.height)
+    expect(mediumBox!.height).toBeLessThan(largeBox!.height)
+
+    await popupPage.close()
   })
 })

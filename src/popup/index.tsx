@@ -29,6 +29,7 @@ export function Popup() {
   const [testState, setTestState] = useState<TestState>('idle')
   const [testMessage, setTestMessage] = useState('')
   const [position, setPosition] = useState(DEFAULT_SETTINGS.overlayPosition)
+  const [overlaySize, setOverlaySize] = useState(DEFAULT_SETTINGS.overlaySize)
   const [showOnLoad, setShowOnLoad] = useState(DEFAULT_SETTINGS.showOverlayOnLoad)
   const [loaded, setLoaded] = useState(false)
   const [lastTestedKey, setLastTestedKey] = useState('')
@@ -46,6 +47,7 @@ export function Popup() {
       setApiKeyDraft(settings.apiKey)
       setEditingApiKey(!settings.apiKey.trim())
       setPosition(settings.overlayPosition)
+      setOverlaySize(settings.overlaySize)
       setShowOnLoad(settings.showOverlayOnLoad)
       setLoaded(true)
     })
@@ -63,9 +65,10 @@ export function Popup() {
       largePayloadThresholdKb: largeKb,
       apiKey: savedApiKey,
       overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
+      overlaySize,
       showOverlayOnLoad: showOnLoad,
     })
-  }, [captureFetch, captureXHR, capturing, largeKb, loaded, position, preciseMode, savedApiKey, showOnLoad, slowMs])
+  }, [captureFetch, captureXHR, capturing, largeKb, loaded, overlaySize, position, preciseMode, savedApiKey, showOnLoad, slowMs])
 
   useEffect(() => {
     if (!loaded) return
@@ -141,6 +144,7 @@ export function Popup() {
       largePayloadThresholdKb: largeKb,
       apiKey: trimmedApiKey,
       overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
+      overlaySize,
       showOverlayOnLoad: showOnLoad,
     })
 
@@ -180,6 +184,7 @@ export function Popup() {
       largePayloadThresholdKb: largeKb,
       apiKey: '',
       overlayPosition: position as typeof DEFAULT_SETTINGS.overlayPosition,
+      overlaySize,
       showOverlayOnLoad: showOnLoad,
     })
 
@@ -207,6 +212,7 @@ export function Popup() {
     setTestMessage('')
     setLastTestedKey('')
     setPosition(DEFAULT_SETTINGS.overlayPosition)
+    setOverlaySize(DEFAULT_SETTINGS.overlaySize)
     setShowOnLoad(DEFAULT_SETTINGS.showOverlayOnLoad)
   }
 
@@ -353,6 +359,25 @@ export function Popup() {
             {activeTab === 'overlay' && (
               <div className="api-popup-panel">
                 <Section title="Overlay Preferences">
+                  <div>
+                    <div className="api-popup-field-label">Overlay size</div>
+                    <div className="api-size-options" role="radiogroup" aria-label="Overlay size">
+                      {(['Large', 'Medium', 'Small'] as const).map(size => (
+                        <button
+                          key={size}
+                          type="button"
+                          role="radio"
+                          aria-checked={overlaySize === size}
+                          className={`api-size-option${overlaySize === size ? ' is-active' : ''}`}
+                          onClick={() => setOverlaySize(size)}
+                        >
+                          <span className={`api-size-preview is-${size.toLowerCase()}`} aria-hidden="true" />
+                          <span>{size}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="api-popup-help">Changes the complete overlay layout and density.</div>
+                  </div>
                   <div className="api-popup-row">
                     <span className="api-popup-label">Default position</span>
                     <select className="api-select" value={position} onChange={event => setPosition(event.target.value)}>

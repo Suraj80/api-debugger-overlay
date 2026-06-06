@@ -126,4 +126,24 @@ describe('settings secret storage', () => {
     const settings = await getSettings()
     expect(settings.apiKey).toBe('sk-ant-version-2')
   })
+
+  it('defaults overlay size to Large and persists another size in synced settings', async () => {
+    const {
+      API_DEBUGGER_SETTINGS_KEY,
+      DEFAULT_SETTINGS,
+      getSettings,
+      normalizeSettings,
+      saveSettings,
+    } = await import('../../src/shared/settings')
+
+    expect(normalizeSettings(undefined).overlaySize).toBe('Large')
+
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      overlaySize: 'Small',
+    })
+
+    expect((syncStore[API_DEBUGGER_SETTINGS_KEY] as { overlaySize?: string }).overlaySize).toBe('Small')
+    expect((await getSettings()).overlaySize).toBe('Small')
+  })
 })

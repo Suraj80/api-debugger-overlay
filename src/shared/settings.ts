@@ -1,4 +1,5 @@
 export type OverlayPosition = 'Bottom Right' | 'Bottom Left' | 'Top Right' | 'Top Left'
+export type OverlaySize = 'Large' | 'Medium' | 'Small'
 
 export interface ApiDebuggerSettings {
   captureEnabled: boolean
@@ -9,6 +10,7 @@ export interface ApiDebuggerSettings {
   largePayloadThresholdKb: number
   apiKey: string
   overlayPosition: OverlayPosition
+  overlaySize: OverlaySize
   showOverlayOnLoad: boolean
 }
 
@@ -36,6 +38,7 @@ export const DEFAULT_SETTINGS: ApiDebuggerSettings = {
   largePayloadThresholdKb: 500,
   apiKey: '',
   overlayPosition: 'Bottom Right',
+  overlaySize: 'Large',
   showOverlayOnLoad: true,
 }
 
