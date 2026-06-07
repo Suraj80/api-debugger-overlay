@@ -39,7 +39,7 @@ export const DEFAULT_SETTINGS: ApiDebuggerSettings = {
   largePayloadThresholdKb: 500,
   apiKey: '',
   overlayPosition: 'Bottom Right',
-  overlaySize: 'Large',
+  overlaySize: 'Medium',
   showOverlayOnLoad: true,
   showOverlayGraph: true,
 }

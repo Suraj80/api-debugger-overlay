@@ -106,9 +106,11 @@ describe('background AI helpers', () => {
     expect(prompt).toContain('A developer wants help understanding an API request.')
     expect(prompt).toContain('Method: POST')
     expect(prompt).toContain('/user/state?view=dashboard')
-    expect(prompt).toContain('For "General info", explain what the API likely does')
+    expect(prompt).toContain('Reply with one short, general explanation.')
+    expect(prompt).toContain('Do not add a separate solution section when no issue is present.')
     expect(prompt).not.toContain('flagged as slow')
-    expect(prompt).not.toContain('suggest one specific fix')
+    expect(prompt).not.toContain('General info:')
+    expect(prompt).not.toContain('Solution to issue:')
   })
 
   it('parses text from a raw Responses API output array', async () => {

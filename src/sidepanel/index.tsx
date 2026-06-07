@@ -35,7 +35,7 @@ type DependencyGraphLayoutNode = DependencyGraphNode & {
   x: number
   y: number
 }
-const MAX_DEPENDENCY_GRAPH_REQUESTS = 50
+const MAX_DEPENDENCY_GRAPH_REQUESTS = 40
 type SessionUpdatedMessage = {
   type: 'SESSION_UPDATED'
   tabId: number
@@ -113,27 +113,36 @@ export function SidePanel() {
   const [sessionTabId, setSessionTabId] = useState<number | null>(null)
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [replayTarget, setReplayTarget] = useState<ReplayRequest | null>(null)
+  const sessionTabIdRef = useRef<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    const setTrackedTabId = (nextTabId: number | null) => {
+      sessionTabIdRef.current = nextTabId
+      setSessionTabId(nextTabId)
+    }
 
     const loadSession = () => {
-      chrome.runtime.sendMessage({ type: 'GET_SESSION' }).then((snapshot: SessionSnapshot | undefined) => {
+      if (document.visibilityState === 'hidden') return
+
+      const trackedTabId = sessionTabIdRef.current ?? undefined
+      chrome.runtime.sendMessage({ type: 'GET_SESSION', tabId: trackedTabId }).then((snapshot: SessionSnapshot | undefined) => {
         if (cancelled || !snapshot) return
 
-        setSessionTabId(snapshot.tabId)
+        setTrackedTabId(snapshot.tabId)
         setRequests(snapshot.requests)
       }).catch(() => {
         if (cancelled) return
 
-        setSessionTabId(null)
-        setRequests([])
+        // Keep the last known session during transient runtime disconnects.
       })
 
-      chrome.runtime.sendMessage({ type: 'GET_REPLAY_TARGET' }).then((snapshot: ReplayTargetSnapshot | undefined) => {
+      chrome.runtime.sendMessage({ type: 'GET_REPLAY_TARGET', tabId: trackedTabId }).then((snapshot: ReplayTargetSnapshot | undefined) => {
         if (cancelled || !snapshot) return
 
-        setSessionTabId(currentTabId => currentTabId ?? snapshot.tabId)
+        if (sessionTabIdRef.current == null) {
+          setTrackedTabId(snapshot.tabId)
+        }
         setReplayTarget(snapshot.request)
         if (snapshot.request) {
           setTab('replay')
@@ -145,7 +154,7 @@ export function SidePanel() {
 
     const handleMessage = (message: unknown) => {
       if (isReplayTargetSelectedMessage(message)) {
-        setSessionTabId(message.tabId)
+        setTrackedTabId(message.tabId)
         setReplayTarget(message.payload)
         setTab('replay')
         return
@@ -162,14 +171,10 @@ export function SidePanel() {
 
       if (!isSessionUpdatedMessage(message)) return
 
-      setSessionTabId(currentTabId => {
-        if (currentTabId === message.tabId || currentTabId == null) {
-          setRequests(message.payload)
-          return message.tabId
-        }
-
-        return currentTabId
-      })
+      if (sessionTabIdRef.current === message.tabId || sessionTabIdRef.current == null) {
+        setTrackedTabId(message.tabId)
+        setRequests(message.payload)
+      }
     }
 
     loadSession()
@@ -326,6 +331,22 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
 function DependencyTab({ requests }: { requests: RequestEntry[] }) {
   const graph = useMemo(() => buildDependencyGraph(requests), [requests])
   const { nodes, edges } = graph
+
+  if (requests.length > MAX_DEPENDENCY_GRAPH_REQUESTS) {
+    return (
+      <section className="api-sidepanel-section">
+        <SectionHeading>API Dependency Graph</SectionHeading>
+        <p className="api-muted">The dependency graph is hidden once a session grows beyond 40 requests.</p>
+        <div className="api-dependency-empty">
+          <DependencyGhost />
+          <div style={{ fontSize: 13 }}>Dependency graph hidden for large sessions</div>
+          <div style={{ color: 'var(--api-border-strong)', fontSize: 12 }}>
+            This session has {requests.length} requests. Reduce the session below 40 requests to view the graph again.
+          </div>
+        </div>
+      </section>
+    )
+  }
 
   if (edges.length === 0) {
     return (
@@ -1484,9 +1505,6 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
 
     <h2>Latency Timeline</h2>
     <div class="chart">${buildLatencySvg(requests)}</div>
-
-    <h2>Dependency Map</h2>
-    <div class="graph">${buildDependencySvg(requests)}</div>
 
     <h2>Request Feed</h2>
     <table>

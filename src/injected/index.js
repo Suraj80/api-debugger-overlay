@@ -631,13 +631,13 @@ const interceptedFetch = async (input, init) => {
     return originalFetch(input, init)
   }
 
-  const startTime = performance.now()
   const url = input instanceof Request ? input.url : input.toString()
   const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
   const requestHeaders = mergeHeaders(input instanceof Request ? input.headers : null, init?.headers)
   const requestBodySource = init?.body ?? await readRequestBody(input)
   const requestBody = bodyToReplayString(requestBodySource)
   const requestId = crypto.randomUUID()
+  const startTime = performance.now()
 
   registerObservedRequest({
     id: requestId,

@@ -19,7 +19,7 @@ type OverlayState = 'feed' | 'paused' | 'minimised' | 'hidden'
 type JsonExpandMode = 'all' | 'none' | null
 type JsonTab = 'response' | 'request'
 type AISuggestionState = 'idle' | 'loading' | 'result' | 'error'
-const brandIconUrl = chrome.runtime.getURL('icons/favicon-32x32.png')
+const brandIconUrl = chrome.runtime.getURL('icons/android-chrome-192x192.png')
 
 function isRequestCompleteMessage(msg: unknown): msg is RequestCompleteMessage {
   return (
@@ -39,10 +39,6 @@ function isRequestUpdatedMessage(msg: unknown): msg is RequestUpdatedMessage {
     (msg as { type?: unknown }).type === 'REQUEST_UPDATED' &&
     'payload' in msg
   )
-}
-
-function LiveDot({ isCapturing }: { isCapturing: boolean }) {
-  return <span className={`apidbg-live-dot${isCapturing ? ' is-capturing' : ''}`} />
 }
 
 function BrandMark() {
@@ -251,46 +247,18 @@ function SpinnerIcon({ size = 16 }: { size?: number }) {
 function MetricCard({
   label,
   value,
-  detail,
   tone,
 }: {
   label: string
   value: string
-  detail: string
   tone: 'purple' | 'green' | 'danger' | 'amber'
 }) {
   return (
     <div className={`apidbg-metric-card is-${tone}`}>
-      <div className="apidbg-metric-icon" aria-hidden="true">
-        {label === 'Total calls' && (
-          <svg viewBox="0 0 20 20" fill="none">
-            <path d="M6.5 4.5c-2 1.2-2.8 3.8-1.6 5.8 1.7 2.8 4 5.1 6.8 6.8 2 1.2 4.6.4 5.8-1.6l.6-1c.3-.6.2-1.3-.4-1.7l-2.3-1.5c-.5-.3-1.2-.2-1.6.2l-.8.9a11 11 0 0 1-5.4-5.4l.9-.8c.4-.4.5-1.1.2-1.6L7.2 2.3C6.8 1.7 6.1 1.6 5.5 2l-1 .6" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
-        {label === 'Avg response' && (
-          <svg viewBox="0 0 20 20" fill="none">
-            <path d="M3 14.5h3.2l2.2-4 2.7 2.1 2.3-5.1 3.6-2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M14.2 5.5H17v2.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
-        {label === 'Errors' && (
-          <svg viewBox="0 0 20 20" fill="none">
-            <path d="M10 3.1 17 16H3L10 3.1Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-            <path d="M10 7.5v4M10 14h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-          </svg>
-        )}
-        {label === 'Duplicates' && (
-          <svg viewBox="0 0 20 20" fill="none">
-            <path d="M6.2 6.2h7.6v7.6H6.2z" stroke="currentColor" strokeWidth="1.35" />
-            <path d="M3.5 10A6.5 6.5 0 0 1 10 3.5M16.5 10A6.5 6.5 0 0 1 10 16.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
-          </svg>
-        )}
-      </div>
       <div className="apidbg-metric-copy">
         <span className="apidbg-metric-label">{label}</span>
         <span className="apidbg-metric-value">{value}</span>
       </div>
-      <span className="apidbg-metric-detail">{detail}</span>
     </div>
   )
 }
@@ -1334,7 +1302,6 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
   const total = totalRequests
   const avg = visibleRequestCount ? Math.round(requests.reduce((sum, r) => sum + r.duration, 0) / visibleRequestCount) : 0
   const errors = requests.filter(r => r.status >= 400).length
-  const errorRate = visibleRequestCount ? Math.round((errors / visibleRequestCount) * 1000) / 10 : 0
   const dupes = requests.filter(r => r.isDuplicate).length
   const isCapturing = effectiveState !== 'paused'
   const showSparkline = settings.showOverlayGraph && requests.length >= 3
@@ -1395,7 +1362,7 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
           className={`apidbg-minimised ${overlayPositionClass} ${overlaySizeClass}`}
           onClick={expandOverlay}
         >
-          <LiveDot isCapturing />
+          <img className="apidbg-minimised-icon" src={brandIconUrl} alt="" aria-hidden="true" />
           <span>API</span>
           <span style={{ color: 'var(--api-text-subtle)', fontSize: 10 }}>^</span>
         </button>
@@ -1459,15 +1426,14 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
           </div>
 
           <div className="apidbg-metrics">
-            <MetricCard label="Total calls" value={String(total)} detail="captured" tone="purple" />
+            <MetricCard label="Total calls" value={String(total)} tone="purple" />
             <MetricCard
               label="Avg response"
               value={`${avg}ms`}
-              detail={avg < 300 ? 'healthy' : avg <= 800 ? 'moderate' : 'slow'}
               tone={avg < 300 ? 'green' : avg <= 800 ? 'amber' : 'danger'}
             />
-            <MetricCard label="Errors" value={String(errors)} detail={`${errorRate}% rate`} tone={errors > 0 ? 'danger' : 'green'} />
-            <MetricCard label="Duplicates" value={String(dupes)} detail="matching calls" tone={dupes > 0 ? 'amber' : 'purple'} />
+            <MetricCard label="Errors" value={String(errors)} tone={errors > 0 ? 'danger' : 'green'} />
+            <MetricCard label="Duplicates" value={String(dupes)} tone={dupes > 0 ? 'amber' : 'purple'} />
           </div>
         </div>
 
@@ -1492,7 +1458,7 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
             <span>Method</span>
             <span>Endpoint</span>
             <span>Status</span>
-            <span>Region</span>
+            <span>Timing</span>
             <span>Time</span>
             <span />
           </div>

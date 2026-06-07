@@ -4,7 +4,7 @@ import type { Root } from 'react-dom/client'
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '../shared/settings'
 import type { AISuggestionResponse } from '../shared/types'
 import '../index.css'
-import brandIcon from '../../icons/favicon-32x32.png'
+import brandIcon from '../../icons/android-chrome-192x192.png'
 
 type TestState = 'idle' | 'loading' | 'ok' | 'err'
 type PopupTab = 'capture' | 'ai' | 'overlay'
@@ -14,6 +14,8 @@ declare global {
     __apiDebuggerPopupRoot?: Root
   }
 }
+
+const DEFAULT_AI_MODEL = 'gpt-5.4-mini'
 
 export function Popup() {
   const [capturing, setCapturing] = useState(DEFAULT_SETTINGS.captureEnabled)
@@ -301,6 +303,7 @@ export function Popup() {
                           </button>
                         </div>
                         <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.openai.com.</div>
+                        <div className="api-popup-help">Default model: {DEFAULT_AI_MODEL}</div>
                         <div className="api-popup-actions">
                           <button
                             className={`api-popup-test${testState === 'ok' ? ' is-ok' : ''}${testState === 'err' ? ' is-err' : ''}`}
@@ -328,8 +331,9 @@ export function Popup() {
                         <div className="api-popup-key-card-status">OpenAI key saved</div>
                         <div className="api-popup-key-card-value">{maskedApiKey}</div>
                         <div className="api-popup-help">Encrypted locally. Only the service worker sends it to api.openai.com.</div>
+                        <div className="api-popup-help">Default model: {DEFAULT_AI_MODEL}</div>
                         <div className="api-popup-actions">
-                          <button className="api-popup-action" onClick={startEditingApiKey}>
+                          <button className="api-popup-action api-popup-action-small" onClick={startEditingApiKey}>
                             Change key
                           </button>
                           <button
@@ -340,7 +344,7 @@ export function Popup() {
                             {testState === 'loading' && <span className="api-spinner" />}
                             {testState === 'loading' ? 'Testing...' : 'Test again'}
                           </button>
-                          <button className="api-popup-action is-danger" onClick={removeApiKey}>
+                          <button className="api-popup-action api-popup-action-remove is-danger" onClick={removeApiKey}>
                             Remove key
                           </button>
                         </div>

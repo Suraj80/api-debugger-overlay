@@ -568,15 +568,10 @@ export function buildAiSuggestionPrompt(request: AISuggestionRequest) {
     request.isDuplicate ? `This endpoint was called ${request.duplicateCount} times this session.` : '',
     request.dependsOnCount > 0 ? `This request is part of a dependency chain with ${request.dependsOnCount} upstream request(s).` : '',
     '',
-    'Reply using exactly these section headings:',
-    'General info:',
-    'Output:',
-    'Solution to issue:',
-    '',
     isProblemRequest
-      ? 'For "General info", explain what the API likely does and why the page may call it. For "Output", summarize what is notable about the response or timing. For "Solution to issue", give one concrete fix for the likely issue.'
-      : 'For "General info", explain what the API likely does and why the page may call it. For "Output", summarize what is notable about the request or response. For "Solution to issue", say "No issue detected." unless there is a meaningful concern worth calling out.',
-    'Keep each section short and concrete. Do not give generic advice.',
+      ? 'Reply with one short, general explanation. Explain what the API likely does, what is notable about the response or timing, and include one concrete fix naturally in the same response.'
+      : 'Reply with one short, general explanation. Explain what the API likely does and what is notable about the request or response. Do not add a separate solution section when no issue is present.',
+    'Keep the response short, concrete, and useful. Do not use section headings. Do not give generic advice.',
   ].filter(Boolean).join('\n')
 }
 

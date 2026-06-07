@@ -63,7 +63,6 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('SLOW')
     expect(html).toContain('Batch the user lookup and trim payload size.')
     expect(html).toContain('&lt;server-down&gt;')
-    expect(html).toContain('Dependency Map')
     expect(html).toContain('Capture Fidelity')
     expect(html).toContain('Failed / Aborted')
   })
@@ -144,10 +143,10 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('2 call chain(s)')
   })
 
-  it('limits the dependency graph to the first 50 requests in the session', async () => {
+  it('limits the dependency graph to the first 40 requests in the session', async () => {
     const { buildDependencySvg } = await import('../../src/sidepanel/index')
 
-    const requests = Array.from({ length: 51 }, (_, index) => createRequest({
+    const requests = Array.from({ length: 41 }, (_, index) => createRequest({
       id: `request-${index}`,
       url: `https://api.example.com/chain/${index}`,
       dependsOn: index === 0 ? [] : [`request-${index - 1}`],
@@ -157,8 +156,8 @@ describe('sidepanel reporting helpers', () => {
     const html = buildDependencySvg(requests)
 
     expect(html).toContain('/chain/0')
-    expect(html).toContain('/chain/49')
-    expect(html).not.toContain('/chain/50')
+    expect(html).toContain('/chain/39')
+    expect(html).not.toContain('/chain/40')
   })
 
   it('marks additions and deletions in replay diffs', async () => {

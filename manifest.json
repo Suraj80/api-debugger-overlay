@@ -38,7 +38,7 @@
   },
 
   "web_accessible_resources": [{
-    "resources": ["src/injected/index.js", "icons/favicon-32x32.png"],
+    "resources": ["src/injected/index.js", "icons/favicon-32x32.png", "icons/android-chrome-192x192.png"],
     "matches": ["<all_urls>"]
   }]
 }
