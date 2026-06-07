@@ -4,6 +4,28 @@ API Debugger Overlay is a Chrome Manifest V3 extension that captures `fetch` and
 
 It is designed for frontend engineers, fullstack developers, and QA engineers who want quick API visibility without keeping DevTools open all the time.
 
+## Screenshots
+
+### Live Traffic Overview
+
+![API Debugger live traffic overview](public/screenshot1.png)
+
+### Request And Response Inspector
+
+![API Debugger request and response inspector](public/screenshot2.png)
+
+### Performance Insights
+
+![API Debugger API performance insights](public/screenshot3.png)
+
+### Dependency Map
+
+![API Debugger dependency map](public/screenshot4.png)
+
+### Capture And Overlay Settings
+
+![API Debugger capture and overlay settings](public/screenshot5.png)
+
 ## Why Use It
 
 - See API traffic directly on the page you are debugging
