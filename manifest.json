@@ -11,7 +11,7 @@
     "512": "icons/android-chrome-512x512.png"
   },
 
-  "permissions": ["storage", "scripting", "activeTab", "sidePanel", "webRequest", "downloads", "debugger"],
+  "permissions": ["storage", "sidePanel", "webRequest", "debugger"],
   "host_permissions": ["<all_urls>"],
 
   "background": {

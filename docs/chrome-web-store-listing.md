@@ -43,7 +43,6 @@ Developer Tools
 - `activeTab`: scopes actions to the current tab
 - `sidePanel`: opens the debugging dashboard
 - `webRequest`: captures final network status information
-- `downloads`: exports session reports to disk
 - `debugger`: enables optional precise timing mode
 - `scripting`: supports extension runtime injection behavior
 - `<all_urls>` host access: needed to observe API traffic on the pages the user chooses to debug

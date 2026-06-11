@@ -27,7 +27,6 @@ This project now supports a simple release flow:
   - `activeTab`: targets the active tab for extension actions
   - `sidePanel`: opens the dashboard UI
   - `webRequest`: enriches captured status data
-  - `downloads`: saves exported HTML reports
   - `debugger`: powers optional precise timing mode
   - `scripting`: required for extension script injection workflows
 - Confirm the privacy disclosure in [privacy-policy.md](./privacy-policy.md) is still accurate.

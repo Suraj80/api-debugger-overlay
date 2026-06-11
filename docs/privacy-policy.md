@@ -61,7 +61,6 @@ The extension requests access needed to debug API activity on pages the user cho
 - `<all_urls>` host access allows the extension to observe API traffic on the active page.
 - `webRequest` is used to enrich captured request status information.
 - `sidePanel` is used to show the larger analysis workspace.
-- `downloads` is used only when the user exports a session report.
 - `debugger` is used only for optional precise timing mode and may cause Chrome to show its standard debugging banner.
 - `storage` is used to persist settings and the encrypted API key.
 

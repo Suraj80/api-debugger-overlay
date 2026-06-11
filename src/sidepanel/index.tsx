@@ -1184,16 +1184,7 @@ export async function exportSessionReport(requests: RequestEntry[]) {
   const filename = `api-debugger-session-${stamp}.html`
 
   try {
-    if (chrome.downloads?.download) {
-      await chrome.downloads.download({
-        url,
-        filename,
-        saveAs: true,
-      })
-    } else {
-      downloadWithAnchor(url, filename)
-    }
-
+    downloadWithAnchor(url, filename)
     return filename
   } catch {
     downloadWithAnchor(url, filename)
