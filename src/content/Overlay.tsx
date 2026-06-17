@@ -820,14 +820,6 @@ function CopyIcon() {
   )
 }
 
-function BracesIcon() {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M6 2.5H5.2c-1 0-1.5.5-1.5 1.5v2.2c0 .8-.4 1.2-1.2 1.2.8 0 1.2.4 1.2 1.2V11c0 1 .5 1.5 1.5 1.5H6M10 2.5h.8c1 0 1.5.5 1.5 1.5v2.2c0 .8.4 1.2 1.2 1.2-.8 0-1.2.4-1.2 1.2V11c0 1-.5 1.5-1.5 1.5H10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
-  )
-}
-
 function SparkleIcon() {
   return (
     <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -1052,15 +1044,6 @@ function RequestRow({ req }: { req: RequestEntry }) {
               <button
                 className="apidbg-editor-action"
                 type="button"
-                onClick={() => setForceExpand(null)}
-                aria-label="JSON formatted view"
-                title="JSON formatted view"
-              >
-                <BracesIcon />
-              </button>
-              <button
-                className="apidbg-editor-action"
-                type="button"
                 onClick={() => setForceExpand(forceExpand === 'all' ? 'none' : 'all')}
                 aria-label={forceExpand === 'all' ? 'Collapse all JSON' : 'Expand all JSON'}
                 title={forceExpand === 'all' ? 'Collapse all' : 'Expand all'}
@@ -1083,27 +1066,6 @@ function RequestRow({ req }: { req: RequestEntry }) {
                   path={tab}
                 />
               </div>
-            </div>
-
-            <div className="apidbg-json-footer">
-              <span className="apidbg-json-meta">
-                {formatBytes(tab === 'response' ? req.responseSize : req.requestSize)} &middot; {countKeys(jsonValue)} keys
-              </span>
-              <span className="apidbg-json-footer-actions">
-                <span className="apidbg-json-format">
-                  JSON
-                  <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                    <path d="m2 3.5 3 3 3-3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </span>
-                <button
-                  className="apidbg-copy-json"
-                  onClick={copyJson}
-                  style={{ color: copied ? 'var(--api-success)' : undefined }}
-                >
-                  {copied ? 'Copied' : 'Copy JSON'}
-                </button>
-              </span>
             </div>
           </div>
 
@@ -1473,4 +1435,3 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
     </>
   )
 }
-

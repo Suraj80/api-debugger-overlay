@@ -463,6 +463,8 @@ function DependencyNode({
   fullPath: string
   count: number
 }) {
+  const displayLabel = trimMiddle(label, 20)
+
   return (
     <g>
       <circle cx={x} cy={y} r={radius} fill="var(--api-surface)" stroke="var(--api-color-primary-soft)" strokeWidth="1.5">
@@ -473,7 +475,8 @@ function DependencyNode({
         {count}
       </text>
       <text x={x} y={y + radius + 13} fill="var(--api-text)" fontSize="10" fontWeight="700" textAnchor="middle">
-        {label}
+        <title>{fullPath}</title>
+        {displayLabel}
       </text>
     </g>
   )
