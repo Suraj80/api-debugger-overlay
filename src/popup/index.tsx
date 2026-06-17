@@ -254,7 +254,7 @@ export function Popup() {
             {activeTab === 'capture' && (
               <div className="api-popup-panel">
                 <Section title="Capture Controls">
-                  <ToggleRow label="Enable capture on this tab" value={capturing} onChange={setCapturing} />
+                  <ToggleRow label="Enable capture" value={capturing} onChange={setCapturing} />
                   <ToggleRow label="Capture fetch requests" value={captureFetch} onChange={setCaptureFetch} />
                   <ToggleRow label="Capture XHR requests" value={captureXHR} onChange={setCaptureXHR} />
                   <ToggleRow label="Precise mode" value={preciseMode} onChange={setPreciseMode} hint="Uses Chrome debugger for DevTools-level timing. Chrome will show a debugging banner on the page." />

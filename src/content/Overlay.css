@@ -573,7 +573,6 @@
 
   .apidbg-row:focus-visible,
   .apidbg-tab:focus-visible,
-  .apidbg-search:focus-visible,
   .apidbg-plain-button:focus-visible,
   .apidbg-primary-button:focus-visible,
   .apidbg-secondary-button:focus-visible,
@@ -700,23 +699,23 @@
 
   .apidbg-search-wrap {
     display: flex;
-    width: min(190px, 32vw);
+    width: min(248px, 42vw);
     height: 32px;
     box-sizing: border-box;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     border: 1px solid var(--api-border);
     border-radius: 7px;
     background: rgba(12, 23, 37, 0.88);
     color: var(--api-text-subtle);
-    padding: 0 10px;
+    padding: 0 6px 0 8px;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
   }
 
   .apidbg-search-wrap:focus-within {
-    border-color: rgba(167, 139, 250, 0.62);
+    border-color: var(--api-border);
     background: rgba(14, 26, 42, 0.96);
-    box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.1);
+    box-shadow: none;
   }
 
   .apidbg-search-wrap svg {
@@ -786,8 +785,8 @@
 
   .apidbg-metadata-icon {
     display: inline-flex;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
@@ -795,20 +794,20 @@
   }
 
   .apidbg-metadata-icon svg {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
   }
 
   .apidbg-metadata-copy {
     display: grid;
     min-width: 0;
-    gap: 2px;
+    gap: 3px;
   }
 
   .apidbg-metadata-label {
     overflow: hidden;
     color: var(--api-text-subtle);
-    font-size: 7px;
+    font-size: 8px;
     line-height: 1;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -818,7 +817,7 @@
     overflow: hidden;
     color: var(--api-text);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 750;
     line-height: 1.15;
     text-overflow: ellipsis;
@@ -1333,9 +1332,9 @@
     height: 24px;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--badge-border, var(--api-border));
-    border-radius: 7px;
-    background: var(--badge-bg, rgba(126, 151, 183, 0.08));
+    border: 0;
+    border-radius: 0;
+    background: transparent;
     color: var(--badge-color, var(--api-text-muted));
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 10px;
@@ -1357,9 +1356,9 @@
     height: 22px;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--chip-border, var(--api-border));
-    border-radius: 7px;
-    background: var(--chip-bg, var(--api-surface));
+    border: 0;
+    border-radius: 0;
+    background: transparent;
     color: var(--chip-color, var(--api-text-subtle));
     font-size: 9px;
     font-weight: 800;
@@ -1596,8 +1595,9 @@
   }
 
   .apidbg-overlay.is-size-medium .apidbg-search-wrap {
-    width: 132px;
+    width: 176px;
     height: 29px;
+    padding: 0 5px 0 7px;
   }
 
   .apidbg-overlay.is-size-medium .apidbg-metadata-item {
@@ -1608,8 +1608,8 @@
 
   .apidbg-overlay.is-size-medium .apidbg-metadata-icon,
   .apidbg-overlay.is-size-medium .apidbg-metadata-icon svg {
-    width: 14px;
-    height: 14px;
+    width: 15px;
+    height: 15px;
   }
 
   .apidbg-overlay.is-size-medium .apidbg-metadata-label {
@@ -1617,7 +1617,7 @@
   }
 
   .apidbg-overlay.is-size-medium .apidbg-metadata-value {
-    font-size: 8px;
+    font-size: 10px;
   }
 
   .apidbg-overlay.is-size-medium .apidbg-editor-body {
@@ -1882,10 +1882,10 @@
   }
 
   .apidbg-overlay.is-size-small .apidbg-search-wrap {
-    width: 92px;
+    width: 124px;
     height: 27px;
     gap: 4px;
-    padding: 0 6px;
+    padding: 0 4px 0 6px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-search-wrap svg {
@@ -1919,7 +1919,7 @@
   }
 
   .apidbg-overlay.is-size-small .apidbg-metadata-value {
-    font-size: 8px;
+    font-size: 9px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-editor-actions {
@@ -2128,4 +2128,3 @@
       transition-duration: 0.001ms !important;
     }
   }
-
