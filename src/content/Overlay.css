@@ -629,7 +629,7 @@
     background:
       radial-gradient(circle at 84% 8%, rgba(124, 92, 255, 0.08), transparent 38%),
       linear-gradient(180deg, rgba(5, 14, 25, 0.99), rgba(4, 11, 20, 0.98));
-    padding: 14px;
+    padding: 10px 14px 14px;
   }
 
   .apidbg-detail.is-modal {
@@ -647,7 +647,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   .apidbg-tabs {
@@ -663,7 +663,7 @@
     cursor: pointer;
     font-size: 11px;
     font-weight: 650;
-    padding: 8px 0 9px;
+    padding: 6px 0 7px;
     text-transform: capitalize;
     transition: color 0.16s ease;
   }
@@ -700,15 +700,15 @@
   .apidbg-search-wrap {
     display: flex;
     width: min(248px, 42vw);
-    height: 32px;
+    height: 28px;
     box-sizing: border-box;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     border: 1px solid var(--api-border);
     border-radius: 7px;
     background: rgba(12, 23, 37, 0.88);
     color: var(--api-text-subtle);
-    padding: 0 6px 0 8px;
+    padding: 0 6px 0 7px;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
   }
 
@@ -719,8 +719,8 @@
   }
 
   .apidbg-search-wrap svg {
-    width: 14px;
-    height: 14px;
+    width: 13px;
+    height: 13px;
     flex: 0 0 auto;
   }
 
@@ -1198,22 +1198,22 @@
 .apidbg-primary-button,
 .apidbg-secondary-button {
   display: inline-flex;
-  min-height: 28px;
+  min-height: 25px;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   border-radius: 7px;
   cursor: pointer;
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
-  padding: 0 10px;
+  padding: 0 8px;
   transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 }
 
 .apidbg-primary-button svg,
 .apidbg-secondary-button svg {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
 }
 
   .apidbg-primary-button {
@@ -1582,12 +1582,12 @@
   }
 
   .apidbg-overlay.is-size-medium .apidbg-detail {
-    padding: 10px;
+    padding: 8px 10px 10px;
   }
 
   .apidbg-overlay.is-size-medium .apidbg-detail-toolbar {
     gap: 8px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
 
   .apidbg-overlay.is-size-medium .apidbg-tabs {
@@ -1596,7 +1596,7 @@
 
   .apidbg-overlay.is-size-medium .apidbg-search-wrap {
     width: 176px;
-    height: 29px;
+    height: 26px;
     padding: 0 5px 0 7px;
   }
 
@@ -1859,13 +1859,13 @@
   }
 
   .apidbg-overlay.is-size-small .apidbg-detail {
-    padding: 8px;
+    padding: 6px 8px 8px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-detail-toolbar {
     align-items: flex-end;
     gap: 5px;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-tabs {
@@ -1883,7 +1883,7 @@
 
   .apidbg-overlay.is-size-small .apidbg-search-wrap {
     width: 124px;
-    height: 27px;
+    height: 24px;
     gap: 4px;
     padding: 0 4px 0 6px;
   }
@@ -1993,10 +1993,10 @@
 
 .apidbg-overlay.is-size-small .apidbg-primary-button,
 .apidbg-overlay.is-size-small .apidbg-secondary-button {
-  min-height: 24px;
+  min-height: 22px;
   gap: 4px;
-  font-size: 8px;
-  padding: 0 7px;
+  font-size: 7px;
+  padding: 0 6px;
 }
 
   .apidbg-overlay.is-size-small .apidbg-primary-button svg,

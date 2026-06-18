@@ -114,6 +114,7 @@ export function SidePanel() {
   const [requests, setRequests] = useState<RequestEntry[]>([])
   const [replayTarget, setReplayTarget] = useState<ReplayRequest | null>(null)
   const sessionTabIdRef = useRef<number | null>(null)
+  const [exportStatus, setExportStatus] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -196,17 +197,38 @@ export function SidePanel() {
     ['replay', 'Replay'],
   ] as const
 
+  const exportSession = () => {
+    setExportStatus('')
+    exportSessionReport(requests)
+      .then(filename => {
+        setExportStatus(`Saved ${filename}`)
+        window.setTimeout(() => setExportStatus(''), 3500)
+      })
+      .catch(error => {
+        setExportStatus(`Export failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+  }
+
   return (
     <div className="api-theme-shell api-sidepanel">
       <header className="api-sidepanel-header">
-        <div className="api-sidepanel-brand">
-          <span className="api-sidepanel-brand-mark">
-            <img src={brandIcon} alt="" />
-          </span>
-          <span className="api-sidepanel-brand-copy">
-            <strong>API Debugger</strong>
-            <span>Live Network Intelligence</span>
-          </span>
+        <div className="api-sidepanel-header-row">
+          <div className="api-sidepanel-brand">
+            <span className="api-sidepanel-brand-mark">
+              <img src={brandIcon} alt="" />
+            </span>
+            <span className="api-sidepanel-brand-copy">
+              <strong>API Debugger</strong>
+              <span>Live Network Intelligence</span>
+            </span>
+          </div>
+          <button
+            className="api-sidepanel-export-button"
+            onClick={exportSession}
+            disabled={requests.length === 0}
+          >
+            Export Session Report
+          </button>
         </div>
         <nav className="api-sidepanel-tabs" aria-label="Side panel views">
           {visibleTabs.map(([key, label]) => (
@@ -220,6 +242,7 @@ export function SidePanel() {
             </button>
           ))}
         </nav>
+        {exportStatus && <div className="api-sidepanel-status api-muted">{exportStatus}</div>}
       </header>
 
       <main className="api-sidepanel-content api-scroll">
@@ -239,7 +262,6 @@ export function SidePanel() {
 }
 
 function SessionTab({ requests }: { requests: RequestEntry[] }) {
-  const [exportStatus, setExportStatus] = useState('')
   const total = requests.length
   const avg = total ? Math.round(requests.reduce((sum, r) => sum + r.duration, 0) / total) : 0
   const errors = requests.filter(r => r.status >= 400).length
@@ -298,31 +320,6 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
             <span style={{ color: latencyColor(entry.avg), fontSize: 12, fontWeight: 750 }}>{formatMs(entry.avg)}</span>
           </div>
         ))}
-      </section>
-
-      <section className="api-sidepanel-section">
-        <button
-          className="api-primary-wide"
-          onClick={() => {
-            setExportStatus('')
-            exportSessionReport(requests)
-              .then(filename => {
-                setExportStatus(`Saved ${filename}`)
-                window.setTimeout(() => setExportStatus(''), 3500)
-              })
-              .catch(error => {
-                setExportStatus(`Export failed: ${error instanceof Error ? error.message : String(error)}`)
-              })
-          }}
-          disabled={requests.length === 0}
-        >
-          Export Session Report
-        </button>
-        {exportStatus && (
-          <div className="api-muted" style={{ marginTop: 8, fontSize: 12 }}>
-            {exportStatus}
-          </div>
-        )}
       </section>
     </div>
   )
