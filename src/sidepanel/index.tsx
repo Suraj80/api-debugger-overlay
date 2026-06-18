@@ -1279,190 +1279,213 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
   <style>
     :root {
       color-scheme: dark;
-      --bg: #121015;
-      --surface: #1e1b22;
-      --raised: #292630;
-      --border: #403a49;
-      --border-strong: #5d536b;
-      --text: #eee8f5;
-      --muted: #9c96a6;
-      --subtle: #79737f;
-      --primary: #cbb8ff;
-      --success: #8fe6bc;
-      --warning: #ffd36f;
-      --danger: #ff8f8f;
+      --bg: #07111f;
+      --bg-glow: radial-gradient(circle at top, rgba(124, 92, 255, 0.16), transparent 30%),
+        radial-gradient(circle at 85% 10%, rgba(65, 233, 158, 0.08), transparent 24%);
+      --surface: rgba(13, 25, 40, 0.92);
+      --surface-raised: rgba(16, 30, 48, 0.96);
+      --surface-soft: rgba(12, 24, 38, 0.82);
+      --border: rgba(120, 146, 177, 0.16);
+      --border-strong: rgba(139, 108, 255, 0.28);
+      --text: #eef4ff;
+      --muted: #aab7cc;
+      --subtle: #7687a0;
+      --primary: #a78bfa;
+      --primary-strong: #8b6cff;
+      --success: #55f0b5;
+      --warning: #ffbf47;
+      --danger: #ff7a73;
+      --info: #64a6ff;
+      --shadow: 0 24px 48px rgba(2, 6, 15, 0.38);
     }
 
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--bg);
+      background: var(--bg-glow), linear-gradient(180deg, #07111f 0%, #08111c 54%, #050d17 100%);
       color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.5;
+      line-height: 1.55;
     }
     main {
       width: min(1180px, calc(100vw - 32px));
       margin: 0 auto;
-      padding: 28px 0 48px;
+      padding: 32px 0 56px;
     }
     header {
       display: flex;
       justify-content: space-between;
-      gap: 16px;
+      gap: 18px;
       align-items: flex-start;
-      margin-bottom: 22px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 18px;
+      margin-bottom: 26px;
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(15, 30, 48, 0.94), rgba(8, 17, 29, 0.94));
+      box-shadow: var(--shadow);
+      padding: 20px 22px;
     }
     h1, h2, h3 { margin: 0; }
-    h1 { font-size: 24px; }
-    h2 { margin: 26px 0 12px; font-size: 16px; }
-    h3 { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    h1 { font-size: 30px; line-height: 1.1; }
+    h2 { margin: 28px 0 14px; font-size: 18px; letter-spacing: -0.01em; }
+    h3 { margin-bottom: 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
     .muted { color: var(--muted); }
     .stats {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
     }
     .card {
       border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface);
-      padding: 12px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(16, 29, 47, 0.94), rgba(10, 20, 33, 0.94));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 18px 32px rgba(3, 8, 18, 0.24);
+      padding: 14px 16px;
     }
     .label {
       color: var(--subtle);
       font-size: 11px;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }
     .value {
-      margin-top: 4px;
-      font-size: 22px;
-      font-weight: 800;
+      margin-top: 6px;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
     }
     .chart, .graph {
       width: 100%;
       min-height: 160px;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface);
-      padding: 12px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(14, 27, 43, 0.94), rgba(9, 18, 31, 0.96));
+      box-shadow: var(--shadow);
+      padding: 16px;
       overflow: auto;
     }
     table {
       width: 100%;
-      border-collapse: collapse;
       border: 1px solid var(--border);
-      background: var(--surface);
+      border-collapse: separate;
+      border-spacing: 0;
+      border-radius: 22px;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(14, 26, 41, 0.96), rgba(8, 16, 28, 0.96));
+      box-shadow: var(--shadow);
       font-size: 12px;
     }
     th, td {
       border-bottom: 1px solid var(--border);
-      padding: 8px;
+      padding: 12px 14px;
       text-align: left;
       vertical-align: top;
     }
     th {
       color: var(--subtle);
       font-size: 11px;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
-      background: var(--raised);
+      background: rgba(16, 31, 49, 0.98);
     }
     .url {
       display: inline-block;
       max-width: 420px;
       overflow-wrap: anywhere;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      color: var(--muted);
+      color: #d7e3f6;
     }
     .method, .badge {
       display: inline-flex;
-      margin-right: 4px;
-      border-radius: 4px;
-      padding: 2px 6px;
+      align-items: center;
+      margin-right: 6px;
+      border-radius: 999px;
+      padding: 5px 10px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 11px;
-      font-weight: 800;
+      font-weight: 700;
     }
-    .method { background: rgba(203, 184, 255, 0.16); color: var(--primary); }
-    .badge { border: 1px solid var(--border-strong); }
-    .warn-bg { background: rgba(201, 167, 77, 0.18); color: var(--warning); }
-    .danger-bg { background: rgba(255, 143, 143, 0.14); color: var(--danger); }
+    .method { border: 1px solid rgba(139, 108, 255, 0.35); background: rgba(139, 108, 255, 0.16); color: #d4c3ff; }
+    .badge { border: 1px solid var(--border-strong); background: rgba(18, 31, 50, 0.92); }
+    .warn-bg { border-color: rgba(255, 191, 71, 0.28); background: rgba(255, 191, 71, 0.16); color: var(--warning); }
+    .danger-bg { border-color: rgba(255, 122, 115, 0.26); background: rgba(255, 122, 115, 0.14); color: var(--danger); }
     .source {
       display: inline-flex;
-      border: 1px solid var(--border-strong);
+      border: 1px solid rgba(120, 146, 177, 0.24);
       border-radius: 999px;
-      padding: 2px 7px;
+      padding: 4px 10px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 10px;
-      font-weight: 800;
+      font-weight: 700;
       white-space: nowrap;
     }
     .source-cdp { background: rgba(143, 230, 188, 0.12); color: var(--success); }
-    .source-performance { background: rgba(137, 194, 255, 0.12); color: #89c2ff; }
+    .source-performance { background: rgba(100, 166, 255, 0.14); color: var(--info); }
     .source-proxy { background: rgba(201, 167, 77, 0.16); color: var(--warning); }
     .success { color: var(--success); }
     .warning { color: var(--warning); }
     .danger { color: var(--danger); }
-    details summary { cursor: pointer; color: var(--primary); }
-    .details-row td { background: #18151d; padding: 8px 12px; }
+    details summary { cursor: pointer; color: #cbb8ff; }
+    details[open] summary { margin-bottom: 12px; }
+    .details-row td { background: rgba(8, 17, 29, 0.98); padding: 12px 14px 16px; }
     .timing-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 8px;
-      margin-top: 10px;
-      margin-bottom: 10px;
+      gap: 10px;
+      margin-top: 12px;
+      margin-bottom: 12px;
     }
     .timing-cell {
       border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--surface);
-      padding: 8px;
+      border-radius: 14px;
+      background: rgba(14, 27, 43, 0.92);
+      padding: 10px 12px;
     }
     .timing-cell .label {
       display: block;
-      margin-bottom: 3px;
+      margin-bottom: 4px;
       font-size: 10px;
     }
     .timing-cell .value {
       margin: 0;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 13px;
+      color: #eef4ff;
     }
     .payload-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 12px;
-      margin-top: 10px;
+      gap: 14px;
+      margin-top: 12px;
     }
     pre {
       max-height: 340px;
       margin: 0;
       overflow: auto;
       border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #111014;
-      color: var(--muted);
-      padding: 10px;
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(8, 17, 29, 0.98), rgba(5, 13, 23, 0.98));
+      color: #d6e0ef;
+      padding: 12px 14px;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
     .suggestion {
-      border-left: 3px solid var(--primary);
-      border-radius: 6px;
-      background: var(--surface);
-      padding: 12px;
-      margin-bottom: 10px;
+      border: 1px solid rgba(139, 108, 255, 0.22);
+      border-left: 3px solid var(--primary-strong);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(15, 29, 47, 0.94), rgba(9, 17, 30, 0.96));
+      padding: 14px 16px;
+      margin-bottom: 12px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
     .callout {
-      margin-top: 12px;
+      margin-top: 14px;
       border: 1px solid var(--border);
-      border-left: 3px solid var(--primary);
-      border-radius: 8px;
-      background: rgba(41, 38, 48, 0.52);
+      border-left: 3px solid var(--primary-strong);
+      border-radius: 18px;
+      background: rgba(13, 24, 38, 0.88);
       color: var(--muted);
-      padding: 12px 14px;
+      padding: 14px 16px;
       font-size: 12px;
     }
   </style>
@@ -1558,12 +1581,12 @@ function buildLatencySvg(requests: RequestEntry[]) {
     const y = height - padding - step * (height - padding * 2 - 18)
 
     return `
-      <line x1="${padding}" y1="${y.toFixed(1)}" x2="${width - padding}" y2="${y.toFixed(1)}" stroke="#403a49" stroke-width="1" opacity="${step === 0 ? '1' : '0.45'}" />
-      <text x="${padding - 8}" y="${(y + 4).toFixed(1)}" fill="#79737f" font-size="10" text-anchor="end">${formatMs(value)}</text>
+      <line x1="${padding}" y1="${y.toFixed(1)}" x2="${width - padding}" y2="${y.toFixed(1)}" stroke="rgba(120, 146, 177, 0.18)" stroke-width="1" opacity="${step === 0 ? '1' : '0.45'}" />
+      <text x="${padding - 8}" y="${(y + 4).toFixed(1)}" fill="#7687a0" font-size="10" text-anchor="end">${formatMs(value)}</text>
     `
   }).join('')
   const dots = points.map(point => `
-    <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${point.request.isSlow || point.request.status >= 400 ? '5' : '3.5'}" fill="${point.request.isSlow ? '#ff8f8f' : point.request.status >= 400 ? '#ffd36f' : '#8fe6bc'}" stroke="#121015" stroke-width="1.5">
+    <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${point.request.isSlow || point.request.status >= 400 ? '5' : '3.5'}" fill="${point.request.isSlow ? '#ff7a73' : point.request.status >= 400 ? '#ffbf47' : '#55f0b5'}" stroke="#07111f" stroke-width="1.5">
       <title>${escapeHtml(`${point.request.method} ${getPath(point.request.url)} - ${formatMs(point.request.duration)} - ${timingSourceLabel(point.request.timingSource)}`)}</title>
     </circle>
   `).join('')

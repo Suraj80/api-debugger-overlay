@@ -34,6 +34,7 @@ export function Popup() {
   const [overlaySize, setOverlaySize] = useState(DEFAULT_SETTINGS.overlaySize)
   const [showOnLoad, setShowOnLoad] = useState(DEFAULT_SETTINGS.showOverlayOnLoad)
   const [showOverlayGraph, setShowOverlayGraph] = useState(DEFAULT_SETTINGS.showOverlayGraph)
+  const [showOverlayStats, setShowOverlayStats] = useState(DEFAULT_SETTINGS.showOverlayStats)
   const [loaded, setLoaded] = useState(false)
   const [lastTestedKey, setLastTestedKey] = useState('')
   const [activeTab, setActiveTab] = useState<PopupTab>('capture')
@@ -53,6 +54,7 @@ export function Popup() {
       setOverlaySize(settings.overlaySize)
       setShowOnLoad(settings.showOverlayOnLoad)
       setShowOverlayGraph(settings.showOverlayGraph)
+      setShowOverlayStats(settings.showOverlayStats)
       setLoaded(true)
     })
   }, [])
@@ -72,8 +74,9 @@ export function Popup() {
       overlaySize,
       showOverlayOnLoad: showOnLoad,
       showOverlayGraph,
+      showOverlayStats,
     })
-  }, [captureFetch, captureXHR, capturing, largeKb, loaded, overlaySize, position, preciseMode, savedApiKey, showOnLoad, showOverlayGraph, slowMs])
+  }, [captureFetch, captureXHR, capturing, largeKb, loaded, overlaySize, position, preciseMode, savedApiKey, showOnLoad, showOverlayGraph, showOverlayStats, slowMs])
 
   useEffect(() => {
     if (!loaded) return
@@ -152,6 +155,7 @@ export function Popup() {
       overlaySize,
       showOverlayOnLoad: showOnLoad,
       showOverlayGraph,
+      showOverlayStats,
     })
 
     setSavedApiKey(trimmedApiKey)
@@ -193,6 +197,7 @@ export function Popup() {
       overlaySize,
       showOverlayOnLoad: showOnLoad,
       showOverlayGraph,
+      showOverlayStats,
     })
 
     setSavedApiKey('')
@@ -222,6 +227,7 @@ export function Popup() {
     setOverlaySize(DEFAULT_SETTINGS.overlaySize)
     setShowOnLoad(DEFAULT_SETTINGS.showOverlayOnLoad)
     setShowOverlayGraph(DEFAULT_SETTINGS.showOverlayGraph)
+    setShowOverlayStats(DEFAULT_SETTINGS.showOverlayStats)
   }
 
   const hasSavedApiKey = Boolean(savedApiKey.trim())
@@ -403,6 +409,12 @@ export function Popup() {
                     value={showOverlayGraph}
                     onChange={setShowOverlayGraph}
                     hint="Turns the overlay timeline chart on or off across pages."
+                  />
+                  <ToggleRow
+                    label="Show global stats cards"
+                    value={showOverlayStats}
+                    onChange={setShowOverlayStats}
+                    hint="Shows or hides the top summary cards in the overlay."
                   />
                 </Section>
               </div>

@@ -433,15 +433,6 @@ function JsonNode({
   )
 }
 
-function countKeys(v: unknown, depth = 0): number {
-  if (depth > 8) return 0
-  if (Array.isArray(v)) return v.reduce((a: number, x) => a + countKeys(x, depth + 1), 0)
-  if (v && typeof v === 'object') {
-    return Object.keys(v).length + Object.values(v).reduce((a: number, x) => a + countKeys(x, depth + 1), 0)
-  }
-  return 0
-}
-
 function parseBody(body: string | null): unknown {
   if (!body) return null
 
@@ -1387,16 +1378,18 @@ export function Overlay({ initialPaused }: { initialPaused: boolean }) {
             </div>
           </div>
 
-          <div className="apidbg-metrics">
-            <MetricCard label="Total calls" value={String(total)} tone="purple" />
-            <MetricCard
-              label="Avg response"
-              value={`${avg}ms`}
-              tone={avg < 300 ? 'green' : avg <= 800 ? 'amber' : 'danger'}
-            />
-            <MetricCard label="Errors" value={String(errors)} tone={errors > 0 ? 'danger' : 'green'} />
-            <MetricCard label="Duplicates" value={String(dupes)} tone={dupes > 0 ? 'amber' : 'purple'} />
-          </div>
+          {settings.showOverlayStats && (
+            <div className="apidbg-metrics">
+              <MetricCard label="Total calls" value={String(total)} tone="purple" />
+              <MetricCard
+                label="Avg response"
+                value={`${avg}ms`}
+                tone={avg < 300 ? 'green' : avg <= 800 ? 'amber' : 'danger'}
+              />
+              <MetricCard label="Errors" value={String(errors)} tone={errors > 0 ? 'danger' : 'green'} />
+              <MetricCard label="Duplicates" value={String(dupes)} tone={dupes > 0 ? 'amber' : 'purple'} />
+            </div>
+          )}
         </div>
 
         {showSparkline && (
