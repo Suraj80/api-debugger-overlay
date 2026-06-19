@@ -37,6 +37,7 @@ const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
 const pendingRequestsByTab = new Map<number, Map<string, PendingRequestState>>()
 const attachedDebuggerTabs = new Set<number>()
 const cdpRequestsByTab = new Map<number, Map<string, CdpRequestState>>()
+let sidePanelBoundTabId: number | null = null
 let lastAiRequestAt = 0
 
 interface NetworkStatusEvent {
@@ -1002,9 +1003,13 @@ function pickTrackedTabId(preferredTabId: number | null | undefined, candidates:
   return uniqueCandidates.length === 1 ? uniqueCandidates[0] : preferredTabId ?? null
 }
 
+function bindSidePanelToTab(tabId: number | null | undefined) {
+  sidePanelBoundTabId = tabId ?? null
+}
+
 async function getSessionSnapshot(tabId?: number): Promise<SessionSnapshot> {
-  const activeTabId = tabId ?? await getActiveTabId()
-  const resolvedTabId = pickTrackedTabId(activeTabId, sessionsByTab.keys())
+  const preferredTabId = tabId ?? sidePanelBoundTabId ?? await getActiveTabId()
+  const resolvedTabId = pickTrackedTabId(preferredTabId, sessionsByTab.keys())
   const tabLabel = await getTabLabel(resolvedTabId)
 
   return {
@@ -1015,8 +1020,8 @@ async function getSessionSnapshot(tabId?: number): Promise<SessionSnapshot> {
 }
 
 async function getReplayTargetSnapshot(tabId?: number): Promise<ReplayTargetSnapshot> {
-  const activeTabId = tabId ?? await getActiveTabId()
-  const resolvedTabId = pickTrackedTabId(activeTabId, replayTargetsByTab.keys())
+  const preferredTabId = tabId ?? sidePanelBoundTabId ?? await getActiveTabId()
+  const resolvedTabId = pickTrackedTabId(preferredTabId, replayTargetsByTab.keys())
 
   return {
     tabId: resolvedTabId,
@@ -1271,6 +1276,9 @@ chrome.tabs.onRemoved.addListener(tabId => {
   replayTargetsByTab.delete(tabId)
   pausedOverlayTabs.delete(tabId)
   networkEventsByTab.delete(tabId)
+  if (sidePanelBoundTabId === tabId) {
+    bindSidePanelToTab(null)
+  }
   clearAllPendingRequests(tabId)
   void detachDebugger(tabId)
 })
@@ -1379,6 +1387,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'OPEN_SIDE_PANEL') {
+    bindSidePanelToTab(sender.tab.id)
     chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => {
       // Side panel open can fail if Chrome does not treat the source as a user gesture.
     })
@@ -1386,6 +1395,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'SELECT_REPLAY') {
+    bindSidePanelToTab(sender.tab.id)
     replayTargetsByTab.set(sender.tab.id, {
       request: message.payload,
       frameId: sender.frameId,

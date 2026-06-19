@@ -282,26 +282,6 @@ function stringifyJsonValue(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
-function JsonPathCopyButton({ path }: { path: string }) {
-  const [copied, setCopied] = useState(false)
-
-  return (
-    <button
-      className={`apidbg-json-copy${copied ? ' is-copied' : ''}`}
-      title={`Copy path: ${path}`}
-      aria-label={`Copy JSON path ${path}`}
-      onClick={event => {
-        event.stopPropagation()
-        navigator.clipboard?.writeText(path)
-        setCopied(true)
-        window.setTimeout(() => setCopied(false), 1200)
-      }}
-    >
-      {copied ? 'Copied' : 'Path'}
-    </button>
-  )
-}
-
 function JsonNode({
   k,
   value,
@@ -340,7 +320,6 @@ function JsonNode({
     const entries = isArr
       ? (obj as unknown[]).map((v, i) => [String(i), v] as [string, unknown])
       : Object.entries(obj as Record<string, unknown>)
-    const count = entries.length
 
     return (
       <div style={{ opacity: dim, paddingLeft: depth === 0 ? 0 : 12, borderLeft: depth === 0 ? 'none' : '1px solid var(--api-border)' }}>
@@ -349,7 +328,7 @@ function JsonNode({
           role="treeitem"
           tabIndex={0}
           aria-expanded={isOpen}
-          aria-label={`${path}, ${isArr ? 'array' : 'object'}, ${count} ${isArr ? 'items' : 'keys'}`}
+          aria-label={k ? `${k}, ${isArr ? 'array' : 'object'}` : isArr ? 'array' : 'object'}
           onClick={() => setOpen(o => !o)}
           onKeyDown={event => {
             if (event.key === 'Enter' || event.key === ' ') {
@@ -378,12 +357,10 @@ function JsonNode({
           {k !== undefined && <span className="apidbg-json-punct">:</span>}
           {!isOpen && (
             <span className="apidbg-json-preview">
-              {isArr ? `[...] ${count} items` : `{...} ${count} keys`}
+              {isArr ? '[...]' : '{...}'}
             </span>
           )}
           {isOpen && <span className="apidbg-json-punct">{isArr ? '[' : '{'}</span>}
-          <span className="apidbg-json-path" title={path}>{path}</span>
-          <JsonPathCopyButton path={path} />
         </div>
         {isOpen && (
           <div role="group">
@@ -415,7 +392,7 @@ function JsonNode({
       className="apidbg-json-row"
       role="treeitem"
       tabIndex={0}
-      aria-label={`${path}, ${valueType}, ${valueText}`}
+      aria-label={k ? `${k}, ${valueType}, ${valueText}` : `${valueType}, ${valueText}`}
       style={{ opacity: dim, paddingLeft: indent + 14 }}
     >
       {k !== undefined && (
@@ -427,8 +404,6 @@ function JsonNode({
         </>
       )}
       <span className={valueClass}>{valueText}</span>
-      <span className="apidbg-json-path" title={path}>{path}</span>
-      <JsonPathCopyButton path={path} />
     </div>
   )
 }
@@ -471,6 +446,63 @@ function getSparklineLeftPadding(chartMax: number) {
   return Math.max(38, label.length * 6 + 12)
 }
 
+type SparklineRange = 20 | 50 | 100 | 'all'
+type SparklineBucket = {
+  requests: RequestEntry[]
+  representative: RequestEntry
+  avgDuration: number
+  maxDuration: number
+  highlight: boolean
+}
+
+function shouldHighlightSparklineRequest(request: RequestEntry) {
+  return request.isSlow || request.status >= 400 || request.status === 0
+}
+
+function selectSparklineRequests(requests: RequestEntry[], range: SparklineRange) {
+  if (range === 'all') return requests
+  return requests.slice(-range)
+}
+
+function buildSparklineBuckets(requests: RequestEntry[], chartWidth: number) {
+  if (requests.length === 0) return []
+
+  const shouldBucket = requests.length > 80
+  if (!shouldBucket) {
+    return requests.map(request => ({
+      requests: [request],
+      representative: request,
+      avgDuration: request.duration,
+      maxDuration: request.duration,
+      highlight: shouldHighlightSparklineRequest(request),
+    }))
+  }
+
+  const targetBuckets = Math.max(12, Math.min(requests.length, Math.floor(chartWidth / 12)))
+  const bucketSize = Math.max(1, Math.ceil(requests.length / targetBuckets))
+  const buckets: SparklineBucket[] = []
+
+  for (let index = 0; index < requests.length; index += bucketSize) {
+    const bucketRequests = requests.slice(index, index + bucketSize)
+    if (bucketRequests.length === 0) continue
+
+    const representative = bucketRequests.reduce((current, request) => (
+      request.duration > current.duration ? request : current
+    ))
+    const totalDuration = bucketRequests.reduce((sum, request) => sum + request.duration, 0)
+
+    buckets.push({
+      requests: bucketRequests,
+      representative,
+      avgDuration: Math.round(totalDuration / bucketRequests.length),
+      maxDuration: representative.duration,
+      highlight: bucketRequests.some(shouldHighlightSparklineRequest),
+    })
+  }
+
+  return buckets
+}
+
 function Sparkline({
   requests,
   overlaySize,
@@ -483,7 +515,10 @@ function Sparkline({
   onToggleCollapsed: () => void
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
-  const [hover, setHover] = useState<{ x: number; y: number; r: RequestEntry } | null>(null)
+  const renderedBucketsRef = useRef<SparklineBucket[]>([])
+  const [range, setRange] = useState<SparklineRange>('all')
+  const [hover, setHover] = useState<{ x: number; y: number; bucket: SparklineBucket } | null>(null)
+  const visibleRequests = useMemo(() => selectSparklineRequests(requests, range), [requests, range])
 
   useEffect(() => {
     const c = ref.current
@@ -500,21 +535,28 @@ function Sparkline({
 
     ctx.scale(dpr, dpr)
     ctx.clearRect(0, 0, w, h)
-    if (collapsed || requests.length < 2) return
+    if (collapsed || visibleRequests.length < 2) {
+      renderedBucketsRef.current = []
+      return
+    }
 
     const styles = getComputedStyle(c)
     const lineColor = styles.getPropertyValue('--api-chart-line').trim() || '#8b6cff'
     const slowColor = styles.getPropertyValue('--api-danger').trim() || '#ff8f8f'
+    const warningColor = styles.getPropertyValue('--api-warning').trim() || '#ffbf47'
     const gridColor = styles.getPropertyValue('--api-chart-grid').trim() || 'rgba(130, 153, 183, 0.12)'
     const labelColor = styles.getPropertyValue('--api-text-subtle').trim() || '#718096'
-    const chartMax = getSparklineChartMax(requests)
+    const chartMax = getSparklineChartMax(visibleRequests)
     const padding = { top: 12, right: 4, bottom: 12, left: getSparklineLeftPadding(chartMax) }
     const chartWidth = Math.max(1, w - padding.left - padding.right)
     const chartHeight = Math.max(1, h - padding.top - padding.bottom)
-    const points = requests.map((r, i) => ({
-      x: padding.left + (i / (requests.length - 1)) * chartWidth,
-      y: padding.top + chartHeight - (r.duration / chartMax) * chartHeight,
-      r,
+    const buckets = buildSparklineBuckets(visibleRequests, chartWidth)
+    renderedBucketsRef.current = buckets
+    const denseMode = visibleRequests.length > 80
+    const points = buckets.map((bucket, i) => ({
+      x: padding.left + (i / Math.max(1, buckets.length - 1)) * chartWidth,
+      y: padding.top + chartHeight - (bucket.avgDuration / chartMax) * chartHeight,
+      bucket,
     }))
 
     ctx.font = '10px Inter, ui-sans-serif, system-ui'
@@ -565,18 +607,26 @@ function Sparkline({
     ctx.shadowBlur = 0
 
     points.forEach(p => {
+      const isError = p.bucket.requests.some(request => request.status >= 400 || request.status === 0)
+      const markerColor = isError ? warningColor : slowColor
+      if (denseMode && !p.bucket.highlight) {
+        return
+      }
+
       ctx.beginPath()
-      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
+      ctx.arc(p.x, p.y, denseMode ? 3.4 : 4, 0, Math.PI * 2)
       ctx.fillStyle = '#f6f2ff'
       ctx.fill()
-      ctx.lineWidth = 2.5
-      ctx.strokeStyle = p.r.isSlow ? slowColor : lineColor
+      ctx.lineWidth = denseMode ? 2.1 : 2.5
+      ctx.strokeStyle = p.bucket.highlight ? markerColor : lineColor
       ctx.stroke()
     })
-  }, [collapsed, overlaySize, requests])
+  }, [collapsed, overlaySize, visibleRequests])
 
-  const chartMax = getSparklineChartMax(requests)
+  const chartMax = getSparklineChartMax(visibleRequests)
   const chartLeftPadding = getSparklineLeftPadding(chartMax)
+  const rangeOptions: SparklineRange[] = [20, 50, 100, 'all']
+  const denseMode = visibleRequests.length > 80
 
   return (
     <div className="apidbg-chart-card">
@@ -585,6 +635,24 @@ function Sparkline({
           <span className="apidbg-chart-title">Response timeline</span>
         </div>
         <span className="apidbg-chart-tools">
+          <span className="apidbg-chart-range-group" role="tablist" aria-label="Timeline range">
+            {rangeOptions.map(option => {
+              const label = option === 'all' ? 'All' : String(option)
+
+              return (
+                <button
+                  key={option}
+                  className={`apidbg-chart-range${range === option ? ' is-active' : ''}`}
+                  type="button"
+                  onClick={() => setRange(option)}
+                  aria-pressed={range === option}
+                  title={`Show ${label} requests`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </span>
           <button
             className="apidbg-chart-toggle"
             type="button"
@@ -605,9 +673,12 @@ function Sparkline({
               const x = event.clientX - rect.left
               const chartX = Math.max(0, x - chartLeftPadding)
               const chartWidth = Math.max(1, rect.width - chartLeftPadding - 4)
-              const idx = Math.round((chartX / chartWidth) * (requests.length - 1))
-              const r = requests[Math.max(0, Math.min(requests.length - 1, idx))]
-              if (r) setHover({ x: event.clientX, y: event.clientY, r })
+              const buckets = renderedBucketsRef.current
+              if (buckets.length === 0) return
+
+              const idx = Math.round((chartX / chartWidth) * Math.max(0, buckets.length - 1))
+              const bucket = buckets[Math.max(0, Math.min(buckets.length - 1, idx))]
+              if (bucket) setHover({ x: event.clientX, y: event.clientY, bucket })
             }}
             onMouseLeave={() => setHover(null)}
           />
@@ -615,7 +686,14 @@ function Sparkline({
       )}
       {!collapsed && hover && (
         <div className="apidbg-tooltip" style={{ top: hover.y - 36, left: hover.x + 8 }}>
-          {getPath(hover.r.url)} - {Math.round(hover.r.duration)}ms
+          {hover.bucket.requests.length === 1
+            ? `${getPath(hover.bucket.representative.url)} - ${Math.round(hover.bucket.representative.duration)}ms`
+            : `${hover.bucket.requests.length} requests - avg ${hover.bucket.avgDuration}ms - max ${hover.bucket.maxDuration}ms`}
+        </div>
+      )}
+      {!collapsed && denseMode && (
+        <div className="apidbg-chart-caption">
+          Dense session mode: normal requests are bucketed, while slow / failing requests stay highlighted.
         </div>
       )}
     </div>

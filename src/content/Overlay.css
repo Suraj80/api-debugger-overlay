@@ -362,6 +362,40 @@
     gap: 8px;
   }
 
+.apidbg-chart-range-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: rgba(9, 18, 31, 0.72);
+}
+
+.apidbg-chart-range {
+  min-width: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--api-text-subtle);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 7px;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.apidbg-chart-range:hover {
+  color: var(--api-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.apidbg-chart-range.is-active {
+  background: rgba(124, 92, 255, 0.18);
+  color: var(--api-color-primary-soft);
+}
+
 .apidbg-chart-title {
   display: block;
 }
@@ -423,6 +457,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.apidbg-chart-caption {
+  color: var(--api-text-subtle);
+  font-size: 9px;
+  line-height: 1.35;
+  padding: 4px 10px 0;
 }
 
   .apidbg-paused {
@@ -581,8 +622,7 @@
   .apidbg-collapse-detail:focus-visible,
   .apidbg-minimised:focus-visible,
   .apidbg-link-button:focus-visible,
-  .apidbg-json-row:focus-visible,
-  .apidbg-json-copy:focus-visible {
+  .apidbg-json-row:focus-visible {
     outline: 2px solid var(--api-color-primary-soft);
     outline-offset: 2px;
   }
@@ -988,18 +1028,8 @@
   }
 
   .apidbg-json-punct,
-  .apidbg-json-preview,
-  .apidbg-json-path {
+  .apidbg-json-preview {
     color: var(--api-text-subtle);
-  }
-
-  .apidbg-json-path {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    font-size: 10px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .apidbg-json-value-string {
@@ -1018,31 +1048,6 @@
   .apidbg-json-value-undefined {
     color: var(--api-text-subtle);
     font-style: italic;
-  }
-
-  .apidbg-json-copy {
-    flex-shrink: 0;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--api-text-subtle);
-    cursor: pointer;
-    font-size: 10px;
-    line-height: 1;
-    opacity: 0;
-    padding: 3px 5px;
-  }
-
-  .apidbg-json-row:hover .apidbg-json-copy,
-  .apidbg-json-copy:focus-visible,
-  .apidbg-json-copy.is-copied {
-    opacity: 1;
-  }
-
-  .apidbg-json-copy:hover,
-  .apidbg-json-copy.is-copied {
-    background: var(--api-surface-raised);
-    color: var(--api-color-primary-soft);
   }
 
 .apidbg-detail-actions {
@@ -1489,6 +1494,12 @@
   height: 22px;
   }
 
+  .apidbg-overlay.is-size-medium .apidbg-chart-range {
+    min-width: 24px;
+    font-size: 9px;
+    padding: 4px 5px;
+  }
+
   .apidbg-overlay.is-size-medium .apidbg-sparkline canvas {
     height: 72px;
   }
@@ -1725,6 +1736,17 @@
 .apidbg-overlay.is-size-small .apidbg-chart-tools {
   gap: 0;
 }
+
+  .apidbg-overlay.is-size-small .apidbg-chart-range-group {
+    gap: 2px;
+    padding: 1px;
+  }
+
+  .apidbg-overlay.is-size-small .apidbg-chart-range {
+    min-width: 22px;
+    font-size: 8px;
+    padding: 4px 4px;
+  }
 
   .apidbg-overlay.is-size-small .apidbg-chart-toggle {
     width: 20px;
