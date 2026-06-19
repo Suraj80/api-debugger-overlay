@@ -661,7 +661,7 @@
     background: none;
     color: var(--api-text-subtle);
     cursor: pointer;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 650;
     padding: 6px 0 7px;
     text-transform: capitalize;
@@ -892,30 +892,18 @@
   }
 
   .apidbg-editor-body {
-    min-height: 168px;
+    min-height: 184px;
   }
 
   .apidbg-json-box {
     position: relative;
-    height: 168px;
+    height: 184px;
     min-height: 132px;
-    max-height: 360px;
     overflow-y: auto;
     box-sizing: border-box;
     background: transparent;
-    counter-reset: apidbg-json-line;
-    padding: 12px 100px 12px 42px;
+    padding: 12px 72px 12px 16px;
     resize: vertical;
-  }
-
-  .apidbg-json-box::before {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 32px;
-    width: 1px;
-    background: rgba(112, 132, 160, 0.13);
-    content: '';
   }
 
   .apidbg-json-footer {
@@ -979,23 +967,9 @@
     gap: 5px;
     border-radius: 4px;
     color: var(--api-text-subtle);
-    counter-increment: apidbg-json-line;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11px;
     line-height: 20px;
-  }
-
-  .apidbg-json-row::before,
-  .apidbg-json-closing::before {
-    position: absolute;
-    left: -36px;
-    width: 22px;
-    color: #64758d;
-    content: counter(apidbg-json-line);
-    font-size: 10px;
-    font-weight: 500;
-    text-align: right;
-    user-select: none;
   }
 
   .apidbg-json-row:hover {
@@ -1621,13 +1595,13 @@
   }
 
   .apidbg-overlay.is-size-medium .apidbg-editor-body {
-    min-height: 148px;
+    min-height: 160px;
   }
 
   .apidbg-overlay.is-size-medium .apidbg-json-box {
-    height: 148px;
+    height: 160px;
     min-height: 120px;
-    padding-right: 96px;
+    padding-right: 68px;
   }
 
 .apidbg-overlay.is-size-medium .apidbg-request-time {
@@ -1874,7 +1848,7 @@
 
   .apidbg-overlay.is-size-small .apidbg-tab,
   .apidbg-overlay.is-size-small .apidbg-plain-button {
-    font-size: 9px;
+    font-size: 8px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-row-tools {
@@ -1939,17 +1913,13 @@
   }
 
   .apidbg-overlay.is-size-small .apidbg-editor-body {
-    min-height: 128px;
+    min-height: 140px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-json-box {
-    height: 128px;
+    height: 140px;
     min-height: 105px;
-    padding: 9px 78px 9px 36px;
-  }
-
-  .apidbg-overlay.is-size-small .apidbg-json-box::before {
-    left: 27px;
+    padding: 9px 58px 9px 12px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-json-row,
@@ -1957,13 +1927,6 @@
     min-height: 18px;
     font-size: 9px;
     line-height: 18px;
-  }
-
-  .apidbg-overlay.is-size-small .apidbg-json-row::before,
-  .apidbg-overlay.is-size-small .apidbg-json-closing::before {
-    left: -32px;
-    width: 19px;
-    font-size: 8px;
   }
 
   .apidbg-overlay.is-size-small .apidbg-json-footer {
