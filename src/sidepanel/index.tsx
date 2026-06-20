@@ -40,6 +40,7 @@ type SessionUpdatedMessage = {
   type: 'SESSION_UPDATED'
   tabId: number
   payload: RequestEntry[]
+  snapshot?: SessionSnapshot
 }
 type ReplayTargetSelectedMessage = {
   type: 'REPLAY_TARGET_SELECTED'
@@ -174,7 +175,7 @@ export function SidePanel() {
 
       if (sessionTabIdRef.current === message.tabId || sessionTabIdRef.current == null) {
         setTrackedTabId(message.tabId)
-        setRequests(message.payload)
+        setRequests(message.snapshot?.requests ?? message.payload)
       }
     }
 
@@ -1218,10 +1219,24 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
   const capturedResponseBodies = requests.filter(request => request.responseBody != null && request.responseBody !== '').length
   const slowest = [...requests].sort((a, b) => b.duration - a.duration)[0]
   const aiSuggestions = requests.filter(request => request.aiSuggestion)
+  const buildUrlCell = (url: string) => {
+    const escapedUrl = escapeHtml(url)
+    return `
+      <details class="url-details">
+        <summary>
+          <span class="url-chevron" aria-hidden="true">></span>
+          <span class="url-summary-copy">
+            <span class="url-preview">${escapedUrl}</span>
+          </span>
+        </summary>
+        <div class="url-full">${escapedUrl}</div>
+      </details>
+    `
+  }
   const rows = requests.map(request => `
     <tr>
       <td><span class="method">${escapeHtml(request.method)}</span></td>
-      <td><span class="url">${escapeHtml(request.url)}</span></td>
+      <td>${buildUrlCell(request.url)}</td>
       <td class="${request.status >= 500 ? 'danger' : request.status >= 400 ? 'warning' : 'success'}">${request.status || '-'}</td>
       <td>${formatMs(request.duration)}</td>
       <td>${formatBytes(request.requestSize)}</td>
@@ -1350,6 +1365,12 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
       font-weight: 700;
       letter-spacing: -0.02em;
     }
+    .value-slowest {
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .chart, .graph {
       width: 100%;
       min-height: 160px;
@@ -1384,12 +1405,51 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
       text-transform: uppercase;
       background: rgba(16, 31, 49, 0.98);
     }
-    .url {
-      display: inline-block;
-      max-width: 420px;
-      overflow-wrap: anywhere;
+    .url-details { max-width: 420px; }
+    .url-details summary {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .url-details summary::-webkit-details-marker { display: none; }
+    .url-chevron {
+      flex: none;
+      color: #cbb8ff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      transform-origin: center;
+      transition: transform 0.16s ease;
+    }
+    .url-details[open] .url-chevron {
+      transform: rotate(90deg);
+    }
+    .url-summary-copy {
+      flex: 1;
+      min-width: 0;
+    }
+    .url-preview, .url-full {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       color: #d7e3f6;
+      overflow-wrap: anywhere;
+    }
+    .url-preview {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+      overflow: hidden;
+    }
+    .url-details[open] .url-preview {
+      display: none;
+    }
+    .url-full {
+      display: none;
+      margin-top: 8px;
+      white-space: normal;
+    }
+    .url-details[open] .url-full {
+      display: block;
     }
     .method, .badge {
       display: inline-flex;
@@ -1504,7 +1564,7 @@ export function buildSessionReportHtml(requests: RequestEntry[], largePayloadThr
       <div class="card"><div class="label">Duplicate Calls</div><div class="value">${duplicates}</div></div>
       <div class="card"><div class="label">Failed / Aborted</div><div class="value">${failedRequests}</div></div>
       <div class="card"><div class="label">Large Payloads</div><div class="value">${largePayloads}</div><div class="muted">over ${formatBytes(largePayloadThresholdKb * 1024)}</div></div>
-      <div class="card"><div class="label">Slowest Endpoint</div><div class="value" style="font-size: 13px; overflow-wrap: anywhere;">${slowest ? escapeHtml(`${formatMs(slowest.duration)} ${getPath(slowest.url)}`) : '-'}</div></div>
+      <div class="card"><div class="label">Slowest Endpoint</div><div class="value value-slowest"${slowest ? ` title="${escapeHtml(`${formatMs(slowest.duration)} ${getPath(slowest.url)}`)}"` : ''}>${slowest ? escapeHtml(`${formatMs(slowest.duration)} ${getPath(slowest.url)}`) : '-'}</div></div>
     </section>
 
     <h2>Capture Fidelity</h2>

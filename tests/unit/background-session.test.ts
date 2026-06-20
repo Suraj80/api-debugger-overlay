@@ -41,6 +41,7 @@ function createRequest(overrides: Partial<RequestEntry> = {}): RequestEntry {
 
 function installChromeMock() {
   let runtimeMessageListener: RuntimeMessageListener | null = null
+  const localStore: Record<string, unknown> = {}
 
   const runtime = {
     id: 'test-extension-id',
@@ -84,9 +85,25 @@ function installChromeMock() {
           set: vi.fn(() => Promise.resolve()),
         },
         local: {
-          get: vi.fn(() => Promise.resolve({})),
-          set: vi.fn(() => Promise.resolve()),
-          remove: vi.fn(() => Promise.resolve()),
+          get: vi.fn((keys?: string | string[]) => {
+            if (!keys) return Promise.resolve({ ...localStore })
+            if (typeof keys === 'string') {
+              return Promise.resolve({ [keys]: localStore[keys] })
+            }
+
+            return Promise.resolve(keys.reduce<Record<string, unknown>>((result, key) => {
+              result[key] = localStore[key]
+              return result
+            }, {}))
+          }),
+          set: vi.fn((items: Record<string, unknown>) => {
+            Object.assign(localStore, items)
+            return Promise.resolve()
+          }),
+          remove: vi.fn((key: string) => {
+            delete localStore[key]
+            return Promise.resolve()
+          }),
         },
       },
     },
@@ -96,6 +113,7 @@ function installChromeMock() {
   return {
     runtime,
     tabs,
+    localStore,
     getRuntimeMessageListener: () => runtimeMessageListener,
   }
 }
@@ -382,5 +400,139 @@ describe('background session helpers', () => {
       }),
     })
     vi.unstubAllGlobals()
+  })
+
+  it('returns a recovered snapshot when the live session is unavailable', async () => {
+    const chromeMock = installChromeMock()
+    const listenerReady = import('../../src/background/index')
+    const storedSnapshot = {
+      tabId: 7,
+      tabLabel: 'Example App',
+      requests: [
+        createRequest({
+          id: 'snapshot-request',
+          url: 'https://api.example.com/snapshot',
+          duration: 340,
+        }),
+      ],
+      lifecycle: 'ended',
+      updatedAt: 123_456,
+    }
+
+    chromeMock.localStore.apiDebuggerSidePanelSnapshots = {
+      7: storedSnapshot,
+    }
+
+    await listenerReady
+    const listener = chromeMock.getRuntimeMessageListener()
+
+    expect(listener).toBeTypeOf('function')
+
+    const snapshot = await new Promise<any>(resolve => {
+      const keepAlive = listener?.({ type: 'GET_SESSION', tabId: 7 }, {}, result => resolve(result))
+      expect(keepAlive).toBe(true)
+    })
+
+    expect(snapshot).toMatchObject({
+      tabId: 7,
+      tabLabel: 'Example App',
+      requests: storedSnapshot.requests,
+      source: 'snapshot',
+      lifecycle: 'ended',
+      updatedAt: 123_456,
+    })
+  })
+
+  it('reuses the stored bound tab snapshot when the side panel is reopened', async () => {
+    const chromeMock = installChromeMock()
+    chromeMock.tabs.query.mockResolvedValue([{ id: 99 }])
+
+    chromeMock.localStore.apiDebuggerSidePanelBoundTabId = 7
+    chromeMock.localStore.apiDebuggerSidePanelSnapshots = {
+      7: {
+        tabId: 7,
+        tabLabel: '(354) YouTube',
+        requests: [
+          createRequest({
+            id: 'reopened-snapshot-request',
+            url: 'https://api.example.com/youtube/stats',
+            duration: 121,
+          }),
+        ],
+        lifecycle: 'ended',
+        updatedAt: 456_789,
+      },
+    }
+
+    await import('../../src/background/index')
+    const listener = chromeMock.getRuntimeMessageListener()
+
+    expect(listener).toBeTypeOf('function')
+
+    const snapshot = await new Promise<any>(resolve => {
+      const keepAlive = listener?.({ type: 'GET_SESSION' }, {}, result => resolve(result))
+      expect(keepAlive).toBe(true)
+    })
+
+    expect(snapshot).toMatchObject({
+      tabId: 7,
+      tabLabel: '(354) YouTube',
+      source: 'snapshot',
+      lifecycle: 'ended',
+      updatedAt: 456_789,
+    })
+    expect(snapshot.requests).toHaveLength(1)
+    expect(snapshot.requests[0].id).toBe('reopened-snapshot-request')
+  })
+
+  it('keeps serving the frozen recovered snapshot even after new live requests arrive', async () => {
+    const chromeMock = installChromeMock()
+    chromeMock.tabs.query.mockResolvedValue([{ id: 7 }])
+
+    chromeMock.localStore.apiDebuggerSidePanelBoundTabId = 7
+    chromeMock.localStore.apiDebuggerSidePanelFrozenSnapshotTabId = 7
+    chromeMock.localStore.apiDebuggerSidePanelSnapshots = {
+      7: {
+        tabId: 7,
+        tabLabel: 'Recovered Session',
+        requests: [
+          createRequest({
+            id: 'frozen-snapshot-request',
+            url: 'https://api.example.com/recovered/session',
+            duration: 480,
+          }),
+        ],
+        lifecycle: 'ended',
+        updatedAt: 987_654,
+      },
+    }
+
+    await import('../../src/background/index')
+    const listener = chromeMock.getRuntimeMessageListener()
+
+    expect(listener).toBeTypeOf('function')
+
+    listener?.({
+      type: 'REQUEST_COMPLETE',
+      payload: createRequest({
+        id: 'new-live-request',
+        url: 'https://api.example.com/new/live',
+        duration: 90,
+      }),
+    }, { tab: { id: 7 } }, () => undefined)
+
+    const snapshot = await new Promise<any>(resolve => {
+      const keepAlive = listener?.({ type: 'GET_SESSION' }, {}, result => resolve(result))
+      expect(keepAlive).toBe(true)
+    })
+
+    expect(snapshot).toMatchObject({
+      tabId: 7,
+      source: 'snapshot',
+      lifecycle: 'ended',
+      updatedAt: 987_654,
+    })
+    expect(snapshot.requests).toHaveLength(1)
+    expect(snapshot.requests[0].id).toBe('frozen-snapshot-request')
   })
 })

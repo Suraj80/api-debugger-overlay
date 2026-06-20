@@ -28,6 +28,9 @@ const AI_RATE_LIMIT_MS = 10000
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 const AI_MODEL = 'gpt-5.4-mini'
 const AI_TEST_MODEL = 'gpt-5.4-mini'
+const SIDE_PANEL_SNAPSHOTS_KEY = 'apiDebuggerSidePanelSnapshots'
+const SIDE_PANEL_BOUND_TAB_KEY = 'apiDebuggerSidePanelBoundTabId'
+const SIDE_PANEL_FROZEN_SNAPSHOT_TAB_KEY = 'apiDebuggerSidePanelFrozenSnapshotTabId'
 const sessionsByTab = new Map<number, RequestEntry[]>()
 const duplicateGroupsByTab = new Map<number, Map<string, DuplicateGroup>>()
 const replayTargetsByTab = new Map<number, ReplayTargetState>()
@@ -118,6 +121,14 @@ interface CdpLoadingFailedParams {
   requestId?: unknown
 }
 
+interface StoredSessionSnapshot {
+  tabId: number
+  tabLabel: string | null
+  requests: RequestEntry[]
+  lifecycle: 'active' | 'ended'
+  updatedAt: number
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('API Debugger installed successfully')
 })
@@ -176,12 +187,98 @@ function isOverlayPaused(tabId: number) {
 }
 
 function publishSession(tabId: number) {
-  chrome.runtime.sendMessage({
-    type: 'SESSION_UPDATED',
-    tabId,
-    payload: getSession(tabId),
+  void getSessionSnapshot(tabId).then(snapshot => {
+    chrome.runtime.sendMessage({
+      type: 'SESSION_UPDATED',
+      tabId,
+      payload: snapshot.requests,
+      snapshot,
+    }).catch(() => {
+      // No extension page is currently listening.
+    })
   }).catch(() => {
-    // No extension page is currently listening.
+    // Ignore snapshot lookup failures during worker churn.
+  })
+}
+
+async function getStoredSessionSnapshots() {
+  const result = await chrome.storage.local.get(SIDE_PANEL_SNAPSHOTS_KEY)
+  return (result[SIDE_PANEL_SNAPSHOTS_KEY] as Record<string, StoredSessionSnapshot> | undefined) ?? {}
+}
+
+async function setStoredSessionSnapshots(
+  snapshots: Record<string, StoredSessionSnapshot>,
+) {
+  await chrome.storage.local.set({
+    [SIDE_PANEL_SNAPSHOTS_KEY]: snapshots,
+  })
+}
+
+async function getStoredSessionSnapshot(tabId: number | null | undefined) {
+  if (tabId == null) return null
+
+  const snapshots = await getStoredSessionSnapshots()
+  return snapshots[String(tabId)] ?? null
+}
+
+async function persistSessionSnapshot(tabId: number, lifecycle: 'active' | 'ended') {
+  const requests = getSession(tabId)
+  const existingSnapshot = await getStoredSessionSnapshot(tabId)
+
+  if (requests.length === 0 && !existingSnapshot) return
+
+  const snapshots = await getStoredSessionSnapshots()
+  const nextSnapshot: StoredSessionSnapshot = {
+    tabId,
+    tabLabel: await getTabLabel(tabId),
+    requests: requests.length > 0 ? requests : existingSnapshot?.requests ?? [],
+    lifecycle,
+    updatedAt: Date.now(),
+  }
+
+  snapshots[String(tabId)] = nextSnapshot
+  await setStoredSessionSnapshots(snapshots)
+}
+
+async function deleteStoredSessionSnapshot(tabId: number) {
+  const snapshots = await getStoredSessionSnapshots()
+  if (!(String(tabId) in snapshots)) return
+
+  delete snapshots[String(tabId)]
+  await setStoredSessionSnapshots(snapshots)
+}
+
+async function getStoredSidePanelBoundTabId() {
+  const result = await chrome.storage.local.get(SIDE_PANEL_BOUND_TAB_KEY)
+  const value = result[SIDE_PANEL_BOUND_TAB_KEY]
+  return typeof value === 'number' ? value : null
+}
+
+async function setStoredSidePanelBoundTabId(tabId: number | null) {
+  if (tabId == null) {
+    await chrome.storage.local.remove(SIDE_PANEL_BOUND_TAB_KEY)
+    return
+  }
+
+  await chrome.storage.local.set({
+    [SIDE_PANEL_BOUND_TAB_KEY]: tabId,
+  })
+}
+
+async function getStoredFrozenSnapshotTabId() {
+  const result = await chrome.storage.local.get(SIDE_PANEL_FROZEN_SNAPSHOT_TAB_KEY)
+  const value = result[SIDE_PANEL_FROZEN_SNAPSHOT_TAB_KEY]
+  return typeof value === 'number' ? value : null
+}
+
+async function setStoredFrozenSnapshotTabId(tabId: number | null) {
+  if (tabId == null) {
+    await chrome.storage.local.remove(SIDE_PANEL_FROZEN_SNAPSHOT_TAB_KEY)
+    return
+  }
+
+  await chrome.storage.local.set({
+    [SIDE_PANEL_FROZEN_SNAPSHOT_TAB_KEY]: tabId,
   })
 }
 
@@ -735,6 +832,9 @@ function rememberRequest(tabId: number, request: RequestEntry) {
 
   requestReceivedAt.set(requestWithNetworkStatus.id, receivedAt)
   sessionsByTab.set(tabId, requests)
+  void persistSessionSnapshot(tabId, 'active').catch(() => {
+    // Ignore snapshot persistence failures during live capture.
+  })
   publishSession(tabId)
   chrome.runtime.sendMessage({
     type: 'DEPENDENCIES_UPDATED',
@@ -953,6 +1053,9 @@ function applyNetworkStatusToSession(tabId: number, event: NetworkStatusEvent) {
   const nextRequests = [...requests]
   nextRequests[matchIndex] = updatedRequest
   sessionsByTab.set(tabId, nextRequests)
+  void persistSessionSnapshot(tabId, 'active').catch(() => {
+    // Ignore snapshot persistence failures during timing updates.
+  })
   publishSession(tabId)
 
   chrome.tabs.sendMessage(tabId, {
@@ -1005,17 +1108,82 @@ function pickTrackedTabId(preferredTabId: number | null | undefined, candidates:
 
 function bindSidePanelToTab(tabId: number | null | undefined) {
   sidePanelBoundTabId = tabId ?? null
+  void setStoredSidePanelBoundTabId(sidePanelBoundTabId).catch(() => {
+    // Ignore persisted binding failures during side panel open/close churn.
+  })
+  void setStoredFrozenSnapshotTabId(null).catch(() => {
+    // Ignore frozen snapshot reset failures when rebinding to a live session.
+  })
 }
 
 async function getSessionSnapshot(tabId?: number): Promise<SessionSnapshot> {
-  const preferredTabId = tabId ?? sidePanelBoundTabId ?? await getActiveTabId()
-  const resolvedTabId = pickTrackedTabId(preferredTabId, sessionsByTab.keys())
-  const tabLabel = await getTabLabel(resolvedTabId)
+  const storedBoundTabId = sidePanelBoundTabId == null
+    ? await getStoredSidePanelBoundTabId()
+    : null
+  const frozenSnapshotTabId = await getStoredFrozenSnapshotTabId()
+  const preferredTabId = tabId ?? sidePanelBoundTabId ?? storedBoundTabId ?? await getActiveTabId()
+  const storedSnapshots = await getStoredSessionSnapshots()
+  const candidateTabIds = [
+    ...sessionsByTab.keys(),
+    ...Object.keys(storedSnapshots).map(key => Number(key)).filter(Number.isFinite),
+  ]
+  const resolvedTabId = pickTrackedTabId(preferredTabId, candidateTabIds)
+  if (resolvedTabId == null) {
+    return {
+      tabId: null,
+      tabLabel: null,
+      requests: [],
+      source: 'live',
+      lifecycle: 'active',
+      updatedAt: null,
+    }
+  }
+
+  if (frozenSnapshotTabId === resolvedTabId) {
+    const frozenSnapshot = storedSnapshots[String(resolvedTabId)]
+    if (frozenSnapshot) {
+      return {
+        tabId: resolvedTabId,
+        tabLabel: frozenSnapshot.tabLabel ?? await getTabLabel(resolvedTabId),
+        requests: frozenSnapshot.requests,
+        source: 'snapshot',
+        lifecycle: frozenSnapshot.lifecycle,
+        updatedAt: frozenSnapshot.updatedAt,
+      }
+    }
+  }
+
+  const liveRequests = sessionsByTab.get(resolvedTabId)
+  if (liveRequests && liveRequests.length > 0) {
+    return {
+      tabId: resolvedTabId,
+      tabLabel: await getTabLabel(resolvedTabId),
+      requests: liveRequests,
+      source: 'live',
+      lifecycle: 'active',
+      updatedAt: Date.now(),
+    }
+  }
+
+  const storedSnapshot = storedSnapshots[String(resolvedTabId)]
+  if (storedSnapshot) {
+    return {
+      tabId: resolvedTabId,
+      tabLabel: storedSnapshot.tabLabel ?? await getTabLabel(resolvedTabId),
+      requests: storedSnapshot.requests,
+      source: 'snapshot',
+      lifecycle: storedSnapshot.lifecycle,
+      updatedAt: storedSnapshot.updatedAt,
+    }
+  }
 
   return {
     tabId: resolvedTabId,
-    tabLabel,
-    requests: resolvedTabId == null ? [] : getSession(resolvedTabId),
+    tabLabel: await getTabLabel(resolvedTabId),
+    requests: [],
+    source: 'live',
+    lifecycle: 'active',
+    updatedAt: null,
   }
 }
 
@@ -1170,6 +1338,9 @@ async function persistAiSuggestionForRequest(requestId: string, suggestion: stri
   const nextRequests = [...requests]
   nextRequests[matchIndex] = updatedRequest
   sessionsByTab.set(tabId, nextRequests)
+  void persistSessionSnapshot(tabId, 'active').catch(() => {
+    // Ignore snapshot persistence failures during AI suggestion persistence.
+  })
   publishSession(tabId)
 
   chrome.tabs.sendMessage(tabId, {
@@ -1278,14 +1449,40 @@ chrome.tabs.onRemoved.addListener(tabId => {
   networkEventsByTab.delete(tabId)
   if (sidePanelBoundTabId === tabId) {
     bindSidePanelToTab(null)
+  } else {
+    void getStoredSidePanelBoundTabId().then(storedTabId => {
+      if (storedTabId === tabId) {
+        return setStoredSidePanelBoundTabId(null)
+      }
+    }).catch(() => {
+      // Ignore persisted binding cleanup failures for closed tabs.
+    })
   }
+  void getStoredFrozenSnapshotTabId().then(frozenTabId => {
+    if (frozenTabId === tabId) {
+      return setStoredFrozenSnapshotTabId(null)
+    }
+  }).catch(() => {
+    // Ignore frozen snapshot cleanup failures for closed tabs.
+  })
   clearAllPendingRequests(tabId)
+  void deleteStoredSessionSnapshot(tabId).catch(() => {
+    // Ignore snapshot cleanup failures for closed tabs.
+  })
   void detachDebugger(tabId)
 })
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== 'loading') return
 
+  void persistSessionSnapshot(tabId, 'ended').catch(() => {
+    // Ignore snapshot persistence failures during navigation.
+  })
+  if (sidePanelBoundTabId === tabId) {
+    void setStoredFrozenSnapshotTabId(tabId).catch(() => {
+      // Ignore frozen snapshot persistence failures during navigation.
+    })
+  }
   sessionsByTab.delete(tabId)
   duplicateGroupsByTab.delete(tabId)
   replayTargetsByTab.delete(tabId)
@@ -1415,6 +1612,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     networkEventsByTab.delete(sender.tab.id)
     clearAllPendingRequests(sender.tab.id)
     cdpRequestsByTab.delete(sender.tab.id)
+    void deleteStoredSessionSnapshot(sender.tab.id).catch(() => {
+      // Ignore snapshot cleanup failures during manual session clearing.
+    })
     publishSession(sender.tab.id)
     return false
   }

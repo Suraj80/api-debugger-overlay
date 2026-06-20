@@ -1509,8 +1509,8 @@
   justify-content: center;
   border: 1px solid rgba(71, 232, 163, 0.22);
   border-radius: 10px;
-  background: linear-gradient(145deg, rgba(26, 121, 85, 0.32), rgba(8, 59, 46, 0.55));
-  box-shadow: 0 8px 24px rgba(31, 214, 143, 0.11), inset 0 1px rgba(255, 255, 255, 0.08);
+  background: transparent;
+  box-shadow: none;
 }
 
 .api-sidepanel-brand-mark img {
@@ -1544,6 +1544,7 @@
 
 .api-sidepanel-tabs {
   gap: 20px;
+  align-items: center;
   border-bottom: 0;
   padding: 0 16px;
 }
@@ -1576,6 +1577,13 @@
 .api-sidepanel-status {
   padding: 6px 16px 0;
   font-size: 11px;
+}
+
+.api-sidepanel-status-inline {
+  margin-left: auto;
+  padding: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .api-sidepanel-tab {

@@ -65,6 +65,10 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('&lt;server-down&gt;')
     expect(html).toContain('Capture Fidelity')
     expect(html).toContain('Failed / Aborted')
+    expect(html).toContain('class="url-details"')
+    expect(html).toContain('class="url-chevron"')
+    expect(html).toContain('class="value value-slowest"')
+    expect(html).toContain('title="2.2s /users/42"')
   })
 
   it('renders explicit placeholders for unavailable payloads in the exported report', async () => {

@@ -110,7 +110,7 @@ export type ExtensionMessage =
   | { type: 'REQUEST_FAILED'; payload: { url: string; error: string } }
   | { type: 'CLEAR_SESSION' }
   | { type: 'GET_SESSION'; tabId?: number }
-  | { type: 'SESSION_UPDATED'; tabId: number; payload: RequestEntry[] }
+  | { type: 'SESSION_UPDATED'; tabId: number; payload: RequestEntry[]; snapshot?: SessionSnapshot }
   | { type: 'DEPENDENCIES_UPDATED'; payload: { requestId: string; dependsOn: string[] } }
   | { type: 'SELECT_REPLAY'; payload: ReplayRequest }
   | { type: 'GET_REPLAY_TARGET'; tabId?: number }
@@ -124,6 +124,9 @@ export interface SessionSnapshot {
   tabId: number | null
   tabLabel?: string | null
   requests: RequestEntry[]
+  source: 'live' | 'snapshot'
+  lifecycle: 'active' | 'ended'
+  updatedAt: number | null
 }
 
 export interface ReplayTargetSnapshot {

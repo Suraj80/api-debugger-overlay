@@ -14,18 +14,6 @@ It is designed for frontend engineers, fullstack developers, and QA engineers wh
 
 ![API Debugger request and response inspector](public/screenshot2.png)
 
-### Performance Insights
-
-![API Debugger API performance insights](public/screenshot3.png)
-
-### Dependency Map
-
-![API Debugger dependency map](public/screenshot4.png)
-
-### Capture And Overlay Settings
-
-![API Debugger capture and overlay settings](public/screenshot5.png)
-
 ## Why Use It
 
 - See API traffic directly on the page you are debugging
