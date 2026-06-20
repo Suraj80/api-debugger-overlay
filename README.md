@@ -84,6 +84,4 @@ pnpm package:extension
 - [Chrome Web Store listing copy](docs/chrome-web-store-listing.md)
 - [Privacy policy](docs/privacy-policy.md)
 
-## License
 
-MIT. See [LICENSE](LICENSE).
