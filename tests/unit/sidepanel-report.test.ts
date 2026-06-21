@@ -113,8 +113,8 @@ describe('sidepanel reporting helpers', () => {
     ])
 
     expect(html).toContain('<svg')
-    expect(html).toContain('/users/42')
-    expect(html).toContain('/42/details')
+    expect(html).toContain('GET /users/:id')
+    expect(html).toContain('GET /:id/details')
     expect(html).toContain('840ms')
   })
 
@@ -147,21 +147,21 @@ describe('sidepanel reporting helpers', () => {
     expect(html).toContain('2 call chain(s)')
   })
 
-  it('limits the dependency graph to the first 40 requests in the session', async () => {
+  it('ranks a focused endpoint subset while aggregating the full session', async () => {
     const { buildDependencySvg } = await import('../../src/sidepanel/index')
 
     const requests = Array.from({ length: 41 }, (_, index) => createRequest({
       id: `request-${index}`,
-      url: `https://api.example.com/chain/${index}`,
+      url: `https://api.example.com/chain/item-${index}`,
       dependsOn: index === 0 ? [] : [`request-${index - 1}`],
-      duration: 150 + index,
+      duration: index === 40 ? 10_000 : 150 + index,
     }))
 
     const html = buildDependencySvg(requests)
 
-    expect(html).toContain('/chain/0')
-    expect(html).toContain('/chain/39')
-    expect(html).not.toContain('/chain/40')
+    expect(html).toContain('Showing 28 of 41 connected endpoints')
+    expect(html).toContain('GET /chain/item-40')
+    expect(html).not.toContain('GET /chain/item-0')
   })
 
   it('marks additions and deletions in replay diffs', async () => {

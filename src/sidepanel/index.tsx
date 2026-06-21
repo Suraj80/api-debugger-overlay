@@ -35,7 +35,10 @@ type DependencyGraphLayoutNode = DependencyGraphNode & {
   x: number
   y: number
 }
-const MAX_DEPENDENCY_GRAPH_REQUESTS = 40
+const MAX_VISIBLE_DEPENDENCY_NODES = 10
+const MAX_FOCUSED_DEPENDENCY_NODES = 8
+const MAX_REPORT_DEPENDENCY_NODES = 28
+const MAX_OVERVIEW_EDGES_PER_DIRECTION = 2
 type SessionUpdatedMessage = {
   type: 'SESSION_UPDATED'
   tabId: number
@@ -327,24 +330,18 @@ function SessionTab({ requests }: { requests: RequestEntry[] }) {
 }
 
 function DependencyTab({ requests }: { requests: RequestEntry[] }) {
-  const graph = useMemo(() => buildDependencyGraph(requests), [requests])
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
+  const fullGraph = useMemo(() => buildDependencyGraph(requests), [requests])
+  const graph = useMemo(
+    () => selectDependencyGraph(
+      fullGraph,
+      focusedNodeId ? MAX_FOCUSED_DEPENDENCY_NODES : MAX_VISIBLE_DEPENDENCY_NODES,
+      focusedNodeId,
+    ),
+    [fullGraph, focusedNodeId],
+  )
   const { nodes, edges } = graph
-
-  if (requests.length > MAX_DEPENDENCY_GRAPH_REQUESTS) {
-    return (
-      <section className="api-sidepanel-section">
-        <SectionHeading>API Dependency Graph</SectionHeading>
-        <p className="api-muted">The dependency graph is hidden once a session grows beyond 40 requests.</p>
-        <div className="api-dependency-empty">
-          <DependencyGhost />
-          <div style={{ fontSize: 13 }}>Dependency graph hidden for large sessions</div>
-          <div style={{ color: 'var(--api-border-strong)', fontSize: 12 }}>
-            This session has {requests.length} requests. Reduce the session below 40 requests to view the graph again.
-          </div>
-        </div>
-      </section>
-    )
-  }
+  const hiddenNodeCount = Math.max(0, fullGraph.nodes.length - nodes.length)
 
   if (edges.length === 0) {
     return (
@@ -362,6 +359,11 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
 
   const width = 360
   const height = 420
+  const nodesPerLevel = nodes.reduce<Map<number, number>>((counts, node) => {
+    counts.set(node.level, (counts.get(node.level) ?? 0) + 1)
+    return counts
+  }, new Map())
+  const hasVerticalLabelSpace = Math.max(...nodes.map(node => node.level), 0) <= 7
   const positions = new Map(
     buildDependencyLayout(nodes, width, height, {
       top: 48,
@@ -374,7 +376,18 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
   return (
     <section className="api-sidepanel-section">
       <SectionHeading>API Dependency Graph</SectionHeading>
-      <p className="api-muted">Grouped by endpoint path. Only connected endpoints are shown. Top rows are root calls; lower rows are downstream dependents.</p>
+      <p className="api-muted">
+        Ranked overview of the strongest relationships. Click a numbered node to isolate its direct neighborhood.
+      </p>
+      <div className="api-dependency-toolbar">
+        <span>
+          Showing {nodes.length} of {fullGraph.nodes.length} connected endpoints
+          {hiddenNodeCount > 0 ? ` (${hiddenNodeCount} hidden)` : ''}
+        </span>
+        {focusedNodeId && (
+          <button type="button" onClick={() => setFocusedNodeId(null)}>Show overview</button>
+        )}
+      </div>
       <svg viewBox={`0 0 ${width} ${height}`} className="api-dependency-graph" role="img" aria-label={`API dependency graph with ${nodes.length} endpoints and ${edges.length} inferred dependencies`}>
         <desc>Directed edges show inferred request chains. Node size represents call frequency and edge color represents average latency.</desc>
         <defs>
@@ -404,7 +417,7 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
             </g>
           )
         })}
-        {nodes.map(node => {
+        {nodes.map((node, index) => {
           const position = positions.get(node.id)
           if (!position) return null
 
@@ -417,6 +430,10 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
               label={node.label}
               fullPath={node.id}
               count={node.count}
+              index={index + 1}
+              focused={focusedNodeId === node.id}
+              showLabel={Boolean(focusedNodeId) && hasVerticalLabelSpace && (nodesPerLevel.get(node.level) ?? 0) <= 4}
+              onClick={() => setFocusedNodeId(current => current === node.id ? null : node.id)}
             />
           )
         })}
@@ -433,6 +450,21 @@ function DependencyTab({ requests }: { requests: RequestEntry[] }) {
           <text x="296" y="9">Very slow 1.5s+</text>
         </g>
       </svg>
+      <div className="api-dependency-endpoints" aria-label="Visible dependency endpoints">
+        {nodes.map((node, index) => (
+          <button
+            key={node.id}
+            type="button"
+            className={focusedNodeId === node.id ? 'is-focused' : ''}
+            title={node.id}
+            onClick={() => setFocusedNodeId(current => current === node.id ? null : node.id)}
+          >
+            <b>{index + 1}</b>
+            <span>{node.id}</span>
+            <strong>{node.count}</strong>
+          </button>
+        ))}
+      </div>
       <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
         {edges.slice(0, 8).map(edge => (
           <div key={`${edge.from}-${edge.to}`} className="api-muted" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 8, alignItems: 'center', fontSize: 11 }}>
@@ -453,6 +485,10 @@ function DependencyNode({
   label,
   fullPath,
   count,
+  index,
+  focused,
+  showLabel,
+  onClick,
 }: {
   x: number
   y: number
@@ -460,22 +496,43 @@ function DependencyNode({
   label: string
   fullPath: string
   count: number
+  index: number
+  focused: boolean
+  showLabel: boolean
+  onClick: () => void
 }) {
-  const displayLabel = trimMiddle(label, 20)
+  const displayLabel = trimMiddle(label, 18)
 
   return (
-    <g>
-      <circle cx={x} cy={y} r={radius} fill="var(--api-surface)" stroke="var(--api-color-primary-soft)" strokeWidth="1.5">
+    <g
+      className={`api-dependency-node${focused ? ' is-focused' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`Focus dependency graph on ${fullPath}`}
+      onClick={onClick}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onClick()
+        }
+      }}
+    >
+      <circle cx={x} cy={y} r={radius} fill="var(--api-surface)" stroke="var(--api-color-primary-soft)" strokeWidth={focused ? 3 : 1.5}>
         <title>{fullPath}</title>
       </circle>
+      <text x={x} y={y + 3} fill="var(--api-text)" fontSize="9" fontWeight="800" textAnchor="middle" pointerEvents="none">
+        {index}
+      </text>
       <circle cx={x + radius - 2} cy={y - radius + 2} r="8" fill="var(--api-color-primary)" stroke="var(--api-bg)" strokeWidth="1.5" />
       <text x={x + radius - 2} y={y - radius + 5} fill="var(--api-text)" fontSize="8" fontWeight="800" textAnchor="middle">
         {count}
       </text>
-      <text x={x} y={y + radius + 13} fill="var(--api-text)" fontSize="10" fontWeight="700" textAnchor="middle">
-        <title>{fullPath}</title>
-        {displayLabel}
-      </text>
+      {showLabel && (
+        <text x={x} y={y + radius + 13} fill="var(--api-text)" fontSize="10" fontWeight="700" textAnchor="middle">
+          <title>{fullPath}</title>
+          {displayLabel}
+        </text>
+      )}
     </g>
   )
 }
@@ -1679,7 +1736,8 @@ function buildLatencySvg(requests: RequestEntry[]) {
 }
 
 export function buildDependencySvg(requests: RequestEntry[]) {
-  const { nodes, edges } = buildDependencyGraph(requests)
+  const fullGraph = buildDependencyGraph(requests)
+  const { nodes, edges } = selectDependencyGraph(fullGraph, MAX_REPORT_DEPENDENCY_NODES)
 
   if (edges.length === 0) {
     return '<div class="muted">No inferred dependencies were captured in this session.</div>'
@@ -1734,7 +1792,7 @@ export function buildDependencySvg(requests: RequestEntry[]) {
     </defs>
     <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="#18151d" />
     <text x="18" y="24" fill="#eee8f5" font-size="13" font-weight="800">Inferred API dependencies</text>
-    <text x="18" y="41" fill="#79737f" font-size="10">Grouped by endpoint path. Only connected endpoints are shown.</text>
+    <text x="18" y="41" fill="#79737f" font-size="10">Grouped by method and normalized endpoint. Showing ${nodes.length} of ${fullGraph.nodes.length} connected endpoints.</text>
     <g transform="translate(${width - 380}, 26)" font-size="10" fill="#9c96a6">
       <line x1="0" y1="0" x2="22" y2="0" stroke="#22C55E" stroke-width="2" /><text x="30" y="4">Fast</text>
       <line x1="86" y1="0" x2="108" y2="0" stroke="#F59E0B" stroke-width="2" /><text x="116" y="4">500ms+</text>
@@ -1747,29 +1805,28 @@ export function buildDependencySvg(requests: RequestEntry[]) {
 }
 
 function buildDependencyGraph(requests: RequestEntry[]) {
-  const graphRequests = requests.slice(0, MAX_DEPENDENCY_GRAPH_REQUESTS)
-  const requestById = new Map(graphRequests.map(request => [request.id, request]))
+  const requestById = new Map(requests.map(request => [request.id, request]))
   const nodeMap = new Map<string, { id: string; label: string; count: number }>()
   const edgeMap = new Map<string, DependencyGraphEdge>()
 
-  graphRequests.forEach(request => {
-    const path = getPath(request.url)
-    const entry = nodeMap.get(path) ?? {
-      id: path,
-      label: getEndpointLabel(path),
+  requests.forEach(request => {
+    const endpoint = getDependencyEndpoint(request)
+    const entry = nodeMap.get(endpoint.id) ?? {
+      id: endpoint.id,
+      label: endpoint.label,
       count: 0,
     }
     entry.count += 1
-    nodeMap.set(path, entry)
+    nodeMap.set(endpoint.id, entry)
   })
 
-  graphRequests.forEach(request => {
-    const to = getPath(request.url)
+  requests.forEach(request => {
+    const to = getDependencyEndpoint(request).id
     request.dependsOn.forEach(sourceId => {
       const source = requestById.get(sourceId)
       if (!source) return
 
-      const from = getPath(source.url)
+      const from = getDependencyEndpoint(source).id
       if (!nodeMap.has(from) || !nodeMap.has(to) || from === to) return
 
       const key = `${from} -> ${to}`
@@ -1806,6 +1863,109 @@ function buildDependencyGraph(requests: RequestEntry[]) {
     .sort((a, b) => a.level - b.level || b.count - a.count || a.label.localeCompare(b.label))
 
   return { nodes, edges }
+}
+
+function getDependencyEndpoint(request: RequestEntry) {
+  const path = normalizeDependencyPath(getPath(request.url))
+  const method = request.method.toUpperCase()
+
+  return {
+    id: `${method} ${path}`,
+    label: `${method} ${getEndpointLabel(path)}`,
+  }
+}
+
+function normalizeDependencyPath(path: string) {
+  return path
+    .split('/')
+    .map(segment => isIdentifierPathSegment(segment) ? ':id' : segment)
+    .join('/')
+}
+
+function isIdentifierPathSegment(segment: string) {
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(segment)
+    } catch {
+      return segment
+    }
+  })()
+
+  return (
+    /^\d+$/.test(decoded) ||
+    /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(decoded) ||
+    /^[0-9a-f]{12,}$/i.test(decoded) ||
+    /^(?:[a-z]+_)?[a-z0-9-]{8,}$/i.test(decoded) && /\d/.test(decoded)
+  )
+}
+
+function selectDependencyGraph(
+  graph: { nodes: DependencyGraphNode[]; edges: DependencyGraphEdge[] },
+  limit: number,
+  focusedNodeId: string | null = null,
+) {
+  const nodeById = new Map(graph.nodes.map(node => [node.id, node]))
+  const scoreNode = (node: DependencyGraphNode) => {
+    const incidentLatency = graph.edges.reduce((total, edge) => (
+      edge.from === node.id || edge.to === node.id ? total + edge.latency : total
+    ), 0)
+    return (node.incoming + node.outgoing) * 5 + node.count * 3 + incidentLatency / 500
+  }
+  const rankedIds = [...graph.nodes]
+    .sort((a, b) => scoreNode(b) - scoreNode(a) || b.count - a.count || a.label.localeCompare(b.label))
+    .map(node => node.id)
+  let selectedIds: string[]
+
+  if (focusedNodeId && nodeById.has(focusedNodeId)) {
+    const neighborIds = graph.edges
+      .filter(edge => edge.from === focusedNodeId || edge.to === focusedNodeId)
+      .sort(compareDependencyEdges)
+      .map(edge => edge.from === focusedNodeId ? edge.to : edge.from)
+    selectedIds = [focusedNodeId, ...Array.from(new Set(neighborIds))]
+  } else {
+    selectedIds = rankedIds
+  }
+
+  const selected = new Set(selectedIds.slice(0, limit))
+  const candidateEdges = graph.edges.filter(edge => selected.has(edge.from) && selected.has(edge.to))
+  const edges = focusedNodeId
+    ? candidateEdges
+        .filter(edge => edge.from === focusedNodeId || edge.to === focusedNodeId)
+        .sort(compareDependencyEdges)
+    : pruneDependencyEdges(candidateEdges)
+  const connectedIds = new Set(edges.flatMap(edge => [edge.from, edge.to]))
+  if (focusedNodeId && selected.has(focusedNodeId)) connectedIds.add(focusedNodeId)
+  const nodes = assignDependencyLevels(
+    graph.nodes
+      .filter(node => connectedIds.has(node.id))
+      .map(node => ({ ...node })),
+    edges,
+  ).sort((a, b) => a.level - b.level || b.count - a.count || a.label.localeCompare(b.label))
+
+  return { nodes, edges }
+}
+
+function compareDependencyEdges(left: DependencyGraphEdge, right: DependencyGraphEdge) {
+  return right.count - left.count || right.latency - left.latency || left.from.localeCompare(right.from)
+}
+
+function pruneDependencyEdges(edges: DependencyGraphEdge[]) {
+  const incoming = new Map<string, number>()
+  const outgoing = new Map<string, number>()
+
+  return [...edges]
+    .sort(compareDependencyEdges)
+    .filter(edge => {
+      const fromCount = outgoing.get(edge.from) ?? 0
+      const toCount = incoming.get(edge.to) ?? 0
+      if (fromCount >= MAX_OVERVIEW_EDGES_PER_DIRECTION || toCount >= MAX_OVERVIEW_EDGES_PER_DIRECTION) {
+        return false
+      }
+
+      outgoing.set(edge.from, fromCount + 1)
+      incoming.set(edge.to, toCount + 1)
+      return true
+    })
 }
 
 function assignDependencyLevels(

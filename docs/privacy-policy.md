@@ -20,7 +20,8 @@ When optional precise timing mode is enabled, the extension may also use Chrome'
 ## How data is used
 
 - Captured request data is used to render the in-page overlay and the side panel.
-- Session data is maintained in memory per tracked browser tab.
+- Live session data is maintained in memory per tracked browser tab.
+- Browser-local session snapshots are stored in `chrome.storage.local` so the side panel can recover the current or most recently ended session after navigation or a service-worker restart.
 - Captured request data may be used to populate the replay editor.
 - Replay requests are executed only when the user explicitly triggers replay.
 - A replay is sent back to the original destination from the original tab context, which means the page's existing cookies, authentication state, headers, and request body may be used as part of that user-triggered action.
@@ -33,8 +34,10 @@ When optional precise timing mode is enabled, the extension may also use Chrome'
 
 - General extension settings are stored in `chrome.storage.sync`.
 - The optional OpenAI API key is stored encrypted in `chrome.storage.local`.
-- Captured session data is kept in in-memory per-tab session state.
-- Captured request history is not written to extension storage unless the user explicitly exports a report.
+- Captured session data is kept in in-memory per-tab session state while the extension is active.
+- Per-tab session snapshots, including captured request metadata and available headers and bodies, are stored in `chrome.storage.local` for side-panel continuity and recovery.
+- Session snapshots remain inside the user's browser profile and are not synchronized through `chrome.storage.sync`.
+- Exporting a report creates a separate local file only when the user explicitly requests it.
 
 ## External services
 
@@ -62,12 +65,14 @@ The extension requests access needed to debug API activity on pages the user cho
 - `webRequest` is used to enrich captured request status information.
 - `sidePanel` is used to show the larger analysis workspace.
 - `debugger` is used only for optional precise timing mode and may cause Chrome to show its standard debugging banner.
-- `storage` is used to persist settings and the encrypted API key.
+- `storage` is used to persist settings, the encrypted API key, and browser-local session snapshots.
 
 ## Data retention
 
-- Session data is cleared when the tracked tab is closed.
-- Session data is also reset when the tracked page navigates.
+- Live in-memory session data is reset when the tracked page navigates.
+- A snapshot of the ended session may remain in `chrome.storage.local` after navigation so the side panel can continue displaying it.
+- In-memory session data and its stored snapshot are deleted when the user clears the session or closes the tracked tab.
+- Removing the extension or clearing its browser storage also removes stored session snapshots and extension settings.
 - Exported reports remain wherever the user saves them locally.
 
 ## Data sharing

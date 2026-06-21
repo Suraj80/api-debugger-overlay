@@ -802,6 +802,92 @@
   height: 400px;
 }
 
+.api-dependency-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0;
+  color: var(--api-text-subtle);
+  font-size: 11px;
+}
+
+.api-dependency-toolbar button {
+  flex: none;
+  border: 1px solid var(--api-border);
+  border-radius: 6px;
+  background: var(--api-surface);
+  color: var(--api-text);
+  cursor: pointer;
+  padding: 5px 8px;
+  font: inherit;
+  font-weight: 700;
+}
+
+.api-dependency-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.api-dependency-node:focus circle:first-of-type,
+.api-dependency-node:hover circle:first-of-type,
+.api-dependency-node.is-focused circle:first-of-type {
+  stroke: var(--api-color-primary);
+}
+
+.api-dependency-endpoints {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.api-dependency-endpoints button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--api-border);
+  border-radius: 6px;
+  background: var(--api-surface);
+  color: var(--api-text-subtle);
+  cursor: pointer;
+  padding: 6px 8px;
+  font: 700 10px ui-monospace, monospace;
+  text-align: left;
+}
+
+.api-dependency-endpoints button b {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--api-color-primary);
+  color: var(--api-text);
+  font-size: 9px;
+}
+
+.api-dependency-endpoints button:hover,
+.api-dependency-endpoints button:focus,
+.api-dependency-endpoints button.is-focused {
+  border-color: var(--api-color-primary);
+  color: var(--api-text);
+  outline: none;
+}
+
+.api-dependency-endpoints button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-dependency-endpoints button strong {
+  color: var(--api-color-primary-soft);
+}
+
 .api-replay {
   display: flex;
   flex-direction: column;

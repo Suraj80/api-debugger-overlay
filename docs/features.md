@@ -78,9 +78,13 @@ The dependency graph shows inferred request chains between endpoints.
 Graph behavior:
 
 - only connected endpoints are shown
+- requests are aggregated by method and normalized endpoint across the full session
+- large graphs show a ranked endpoint overview instead of hiding the graph
+- the overview shows at most 10 numbered endpoints and prunes weaker crossing edges
+- selecting an endpoint isolates its direct upstream and downstream neighbors
 - node size reflects call frequency
 - edge color reflects average latency
-- the graph is intentionally capped for readability
+- visible nodes are intentionally capped for readability
 
 ### Replay View
 
