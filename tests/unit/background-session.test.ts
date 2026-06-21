@@ -62,16 +62,18 @@ function installChromeMock() {
     onUpdated: { addListener: vi.fn() },
   }
 
+  const debuggerApi = {
+    attach: vi.fn(() => Promise.resolve()),
+    detach: vi.fn(() => Promise.resolve()),
+    sendCommand: vi.fn(() => Promise.resolve()),
+    onDetach: { addListener: vi.fn() },
+    onEvent: { addListener: vi.fn() },
+  }
+
   Object.defineProperty(globalThis, 'chrome', {
     value: {
       runtime,
-      debugger: {
-        attach: vi.fn(() => Promise.resolve()),
-        detach: vi.fn(() => Promise.resolve()),
-        sendCommand: vi.fn(() => Promise.resolve()),
-        onDetach: { addListener: vi.fn() },
-        onEvent: { addListener: vi.fn() },
-      },
+      debugger: debuggerApi,
       tabs,
       webRequest: {
         onCompleted: { addListener: vi.fn() },
@@ -113,6 +115,7 @@ function installChromeMock() {
   return {
     runtime,
     tabs,
+    debuggerApi,
     localStore,
     getRuntimeMessageListener: () => runtimeMessageListener,
   }
@@ -308,6 +311,56 @@ describe('background session helpers', () => {
 
     expect(merged.duration).toBe(1080)
     expect(merged.timingSource).toBe('performance')
+  })
+
+  it('builds CDP timing from protocol events when detailed network timing is unavailable', async () => {
+    installChromeMock()
+    const { buildCdpTimingPayload } = await import('../../src/background/index')
+
+    const timing = buildCdpTimingPayload('cached-request', {
+      requestId: 'cdp-1',
+      url: 'https://api.example.com/cached',
+      method: 'GET',
+      wallTime: 1_750_000_000_000,
+      startedAt: 10,
+      headersAt: 10.04,
+      finishedAt: 10.12,
+      encodedDataLength: 512,
+    })
+
+    expect(timing).toEqual(expect.objectContaining({
+      id: 'cached-request',
+      duration: 120,
+      ttfb: 40,
+      responseTime: 80,
+      responseSize: 512,
+      timingSource: 'cdp',
+    }))
+  })
+
+  it('waits for CDP network enablement before releasing content bootstrap', async () => {
+    const chromeMock = installChromeMock()
+    vi.mocked(chrome.storage.sync.get).mockResolvedValue({
+      apiDebuggerSettings: { preciseModeEnabled: true },
+    })
+    let enableNetwork: (() => void) | undefined
+    chromeMock.debuggerApi.sendCommand.mockImplementation(() => new Promise<void>(resolve => {
+      enableNetwork = resolve
+    }))
+    await import('../../src/background/index')
+    const listener = chromeMock.getRuntimeMessageListener()
+    const sendResponse = vi.fn()
+
+    const keepAlive = listener?.({ type: 'GET_OVERLAY_STATE' }, { tab: { id: 7 } }, sendResponse)
+    expect(keepAlive).toBe(true)
+    await vi.waitFor(() => {
+      expect(chromeMock.debuggerApi.attach).toHaveBeenCalledWith({ tabId: 7 }, '1.3')
+    })
+    expect(sendResponse).not.toHaveBeenCalled()
+
+    enableNetwork?.()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(sendResponse).toHaveBeenCalledWith({ tabId: 7, paused: false })
   })
 
   it('runs replay requests from the background and publishes progress', async () => {

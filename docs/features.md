@@ -39,6 +39,7 @@ Settings include:
 - capture `fetch`
 - capture XHR
 - precise timing mode using Chrome debugger APIs
+- precise mode waits for CDP network capture before page interception starts and uses protocol event timing when detailed timing fields are unavailable
 - slow request threshold
 - large payload threshold
 - overlay position

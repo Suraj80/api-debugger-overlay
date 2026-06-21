@@ -22,6 +22,7 @@ const NETWORK_MATCH_WINDOW_MS = 5000
 const PENDING_REQUEST_FALLBACK_MS = 1000
 const PENDING_REQUEST_CLEANUP_MS = 5000
 const CDP_MATCH_WINDOW_MS = 5000
+const MAX_CDP_REQUESTS_PER_TAB = 1000
 const LOCALHOST_DURATION_CLAMP_DELTA_MS = 150
 const LOCALHOST_DURATION_CLAMP_RATIO = 1.2
 const AI_RATE_LIMIT_MS = 10000
@@ -39,6 +40,7 @@ const requestReceivedAt = new Map<string, number>()
 const networkEventsByTab = new Map<number, NetworkStatusEvent[]>()
 const pendingRequestsByTab = new Map<number, Map<string, PendingRequestState>>()
 const attachedDebuggerTabs = new Set<number>()
+const debuggerAttachPromises = new Map<number, Promise<void>>()
 const cdpRequestsByTab = new Map<number, Map<string, CdpRequestState>>()
 let sidePanelBoundTabId: number | null = null
 let lastAiRequestAt = 0
@@ -86,7 +88,9 @@ interface CdpRequestState {
   url: string
   method: string
   wallTime: number
+  startedAt: number
   finishedAt: number
+  headersAt?: number
   matchedRequestId?: string
   status?: number
   timing?: CdpTimingData
@@ -105,6 +109,7 @@ interface CdpRequestWillBeSentParams {
 
 interface CdpResponseReceivedParams {
   requestId?: unknown
+  timestamp?: unknown
   response?: {
     status?: unknown
     timing?: unknown
@@ -290,7 +295,7 @@ function urlsLooselyMatch(left: string, right: string) {
   try {
     const leftUrl = new URL(normalizedLeft)
     const rightUrl = new URL(normalizedRight)
-    return leftUrl.pathname === rightUrl.pathname
+    return leftUrl.origin === rightUrl.origin && leftUrl.pathname === rightUrl.pathname
   } catch {
     return normalizedLeft === normalizedRight
   }
@@ -405,6 +410,9 @@ function updateStoredRequestTiming(tabId: number, timing: TimingUpdatePayload) {
   const nextRequests = [...requests]
   nextRequests[matchIndex] = updatedRequest
   sessionsByTab.set(tabId, nextRequests)
+  void persistSessionSnapshot(tabId, 'active').catch(() => {
+    // Ignore snapshot persistence failures during timing refinement.
+  })
   publishSession(tabId)
 
   chrome.tabs.sendMessage(tabId, {
@@ -464,35 +472,44 @@ function findBestCdpMatch(tabId: number, proxyRequest: RequestEntry) {
   return bestMatch
 }
 
-function buildCdpTimingPayload(requestId: string, cdpRequest: CdpRequestState): TimingUpdatePayload | null {
-  if (!cdpRequest.timing) return null
-
+export function buildCdpTimingPayload(requestId: string, cdpRequest: CdpRequestState): TimingUpdatePayload | null {
   const timing = cdpRequest.timing
-  const duration = cdpRequest.encodedDataLength != null
-    ? Math.max(0, Math.round((cdpRequest.finishedAt - timing.requestTime) * 1000))
+  const eventDuration = cdpRequest.encodedDataLength != null && cdpRequest.finishedAt >= cdpRequest.startedAt
+    ? Math.max(0, Math.round((cdpRequest.finishedAt - cdpRequest.startedAt) * 1000))
     : 0
+  const eventTtfb = cdpRequest.headersAt != null && cdpRequest.headersAt >= cdpRequest.startedAt
+    ? Math.max(0, Math.round((cdpRequest.headersAt - cdpRequest.startedAt) * 1000))
+    : 0
+  const detailedTtfb = timing && timing.receiveHeadersEnd > 0 && timing.sendEnd >= 0
+    ? Math.max(0, Math.round(timing.receiveHeadersEnd - timing.sendEnd))
+    : 0
+  const duration = eventDuration > 0
+    ? eventDuration
+    : timing?.receiveHeadersEnd && timing.receiveHeadersEnd > 0
+      ? Math.round(timing.receiveHeadersEnd)
+      : eventTtfb
+
+  if (!timing && duration <= 0 && eventTtfb <= 0) return null
 
   return {
     id: requestId,
     url: cdpRequest.url,
-    duration: duration > 0 ? duration : Math.max(0, Math.round(timing.receiveHeadersEnd)),
+    duration,
     startTime: cdpRequest.wallTime,
-    ttfb: timing.receiveHeadersEnd > 0 && timing.sendEnd >= 0
-      ? Math.max(0, Math.round(timing.receiveHeadersEnd - timing.sendEnd))
-      : 0,
-    dnsTime: timing.dnsEnd >= 0 && timing.dnsStart >= 0
+    ttfb: detailedTtfb || eventTtfb,
+    dnsTime: timing && timing.dnsEnd >= 0 && timing.dnsStart >= 0
       ? Math.max(0, Math.round(timing.dnsEnd - timing.dnsStart))
       : 0,
-    connectTime: timing.connectEnd >= 0 && timing.connectStart >= 0
+    connectTime: timing && timing.connectEnd >= 0 && timing.connectStart >= 0
       ? Math.max(0, Math.round(timing.connectEnd - timing.connectStart))
       : 0,
-    sslTime: timing.sslEnd >= 0 && timing.sslStart >= 0
+    sslTime: timing && timing.sslEnd >= 0 && timing.sslStart >= 0
       ? Math.max(0, Math.round(timing.sslEnd - timing.sslStart))
       : 0,
-    requestTime: timing.receiveHeadersEnd > 0 && timing.sendEnd >= 0
-      ? Math.max(0, Math.round(timing.receiveHeadersEnd - timing.sendEnd))
+    requestTime: detailedTtfb || eventTtfb,
+    responseTime: cdpRequest.encodedDataLength != null && cdpRequest.headersAt != null && cdpRequest.finishedAt >= cdpRequest.headersAt
+      ? Math.max(0, Math.round((cdpRequest.finishedAt - cdpRequest.headersAt) * 1000))
       : 0,
-    responseTime: 0,
     responseSize: cdpRequest.encodedDataLength ?? 0,
     decodedBodySize: 0,
     transferSize: cdpRequest.encodedDataLength ?? 0,
@@ -547,18 +564,40 @@ function queueTimingUpdate(tabId: number, timing: TimingUpdatePayload) {
   updateStoredRequestTiming(tabId, timing)
 }
 
-async function attachDebugger(tabId: number) {
+function attachDebugger(tabId: number) {
   if (attachedDebuggerTabs.has(tabId)) return
+  const existingAttach = debuggerAttachPromises.get(tabId)
+  if (existingAttach) return existingAttach
 
-  await chrome.debugger.attach({ tabId }, '1.3')
-  attachedDebuggerTabs.add(tabId)
-  await chrome.debugger.sendCommand({ tabId }, 'Network.enable', {
-    maxTotalBufferSize: 1000000,
-    maxResourceBufferSize: 1000000,
+  const attachPromise = (async () => {
+    await chrome.debugger.attach({ tabId }, '1.3')
+    try {
+      await chrome.debugger.sendCommand({ tabId }, 'Network.enable', {
+        maxTotalBufferSize: 1000000,
+        maxResourceBufferSize: 1000000,
+      })
+      attachedDebuggerTabs.add(tabId)
+    } catch (error) {
+      await chrome.debugger.detach({ tabId }).catch(() => {
+        // Ignore cleanup failure after an incomplete attachment.
+      })
+      throw error
+    }
+  })().finally(() => {
+    debuggerAttachPromises.delete(tabId)
   })
+
+  debuggerAttachPromises.set(tabId, attachPromise)
+  return attachPromise
 }
 
 async function detachDebugger(tabId: number) {
+  const pendingAttach = debuggerAttachPromises.get(tabId)
+  if (pendingAttach) {
+    await pendingAttach.catch(() => {
+      // A failed attachment is already detached by attachDebugger.
+    })
+  }
   if (!attachedDebuggerTabs.has(tabId)) return
 
   try {
@@ -566,6 +605,7 @@ async function detachDebugger(tabId: number) {
   } catch {
     // Tab may already be gone or detached.
   } finally {
+    debuggerAttachPromises.delete(tabId)
     attachedDebuggerTabs.delete(tabId)
     cdpRequestsByTab.delete(tabId)
   }
@@ -1381,11 +1421,17 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       return
     }
 
+    if (cdpRequests.size >= MAX_CDP_REQUESTS_PER_TAB) {
+      const oldestRequestId = cdpRequests.keys().next().value
+      if (oldestRequestId != null) cdpRequests.delete(oldestRequestId)
+    }
+
     cdpRequests.set(String(requestId), {
       requestId: String(requestId),
       url: String(request.url),
       method: String(request.method).toUpperCase(),
       wallTime: Math.round(Number(wallTime) * 1000),
+      startedAt: Number(timestamp),
       finishedAt: Number(timestamp),
     })
     return
@@ -1403,8 +1449,19 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     cdpRequests.set(String(requestId), {
       ...current,
       status: Number(response.status),
+      headersAt: Number(responseParams.timestamp ?? current.headersAt ?? current.startedAt),
       timing: response.timing as CdpTimingData | undefined,
     })
+
+    if (current.matchedRequestId) {
+      const timingPayload = buildCdpTimingPayload(current.matchedRequestId, {
+        ...current,
+        status: Number(response.status),
+        headersAt: Number(responseParams.timestamp ?? current.headersAt ?? current.startedAt),
+        timing: response.timing as CdpTimingData | undefined,
+      })
+      if (timingPayload) queueTimingUpdate(tabId, timingPayload)
+    }
     return
   }
 
@@ -1521,10 +1578,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_OVERLAY_STATE') {
-    void ensurePreciseModeForTab(sender.tab?.id ?? message.tabId).catch(() => {
-      // Ignore attach failures here; overlay state can still be returned.
-    })
-    getOverlayStateSnapshot(message.tabId).then(sendResponse)
+    const targetTabId = sender.tab?.id ?? message.tabId
+    ensurePreciseModeForTab(targetTabId)
+      .catch(() => {
+        // Ignore attach failures here; overlay state can still be returned.
+      })
+      .then(() => getOverlayStateSnapshot(targetTabId))
+      .then(sendResponse)
     return true
   }
 
